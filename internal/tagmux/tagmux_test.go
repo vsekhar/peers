@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vsekhar/peers/tagmux"
+	"github.com/vsekhar/peers/internal/tagmux"
 )
 
 var (
