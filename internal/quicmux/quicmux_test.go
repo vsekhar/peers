@@ -49,13 +49,26 @@ func generateTLSConfig() *tls.Config {
 	}
 }
 
-func TestQuicMux(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	m, err := quicmux.New(ctx, address, generateTLSConfig())
+var tlsConfig *tls.Config
+
+func init() {
+	tlsConfig = generateTLSConfig()
+}
+
+func makeMux(t *testing.T) (m *quicmux.Mux, cancel func()) {
+	var ctx context.Context
+	var err error
+	ctx, cancel = context.WithCancel(context.Background())
+	m, err = quicmux.New(ctx, address, tlsConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return m, cancel
+}
+
+func TestQuicMux(t *testing.T) {
+	m, cancel := makeMux(t)
+	defer cancel()
 	defer m.Close()
 	network := m.NewNetwork(tag)
 	l, err := network.Listen()
@@ -107,4 +120,36 @@ func TestQuicMux(t *testing.T) {
 	wg.Wait()
 	recvC.Close()
 	sendC.Close()
+}
+
+func TestUDP(t *testing.T) {
+	m, cancel := makeMux(t)
+	defer cancel()
+	defer m.Close()
+
+	n1 := m.NewNetwork("network1")
+	// n2 := m.NewNetwork("network2")
+
+	sendC, err := n1.ListenPacket()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sendC.Close()
+	recvC, err := n1.ListenPacket()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recvC.Close()
+	_, err = sendC.WriteTo(payload, recvC.LocalAddr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 1000)
+	n, _, err := recvC.ReadFrom(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf[:n], payload) {
+		t.Errorf("payloads do not match: expected %v, got %v", payload, buf[:n])
+	}
 }

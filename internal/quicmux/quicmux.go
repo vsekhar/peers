@@ -8,6 +8,10 @@
 // Clients and servers must both use quicmux so that the proper negotiation can
 // take place. Connecting quicmux clients to "regular" servers or vice versa is
 // not supported.
+//
+// Quic was selected since it supports arbitrarily-sized UDP packets, which
+// ensures the encapsulation of quicmux does not produce more fragmentation at
+// the application layer, and thus remains transparent to the application.
 package quicmux
 
 import (
@@ -39,6 +43,8 @@ import (
 var encoding = binary.LittleEndian
 
 const tagLengthFieldSize = 4 // uint16
+const packetConnBufferSize = 8
+
 var okMsg = []byte("OK")
 var noListenerMsg = []byte("NL")
 
@@ -292,7 +298,7 @@ func New(ctx context.Context, address string, tcfg *tls.Config) (*Mux, error) {
 						m.nonBlockErr(fmt.Errorf("short packet"))
 						continue
 					}
-					buf := bytes.NewBuffer(b[:tagLengthFieldSize])
+					buf := bytes.NewBuffer(b)
 					tag, err := readTag(buf)
 					if err != nil {
 						m.nonBlockErr(err)
@@ -302,11 +308,11 @@ func New(ctx context.Context, address string, tcfg *tls.Config) (*Mux, error) {
 					pl, ok := m.packetEntries[tag]
 					m.mu.Unlock()
 					if !ok {
-						continue
+						continue // No listener, drop the packet
 					}
 					p := packet{
 						addr:    session.RemoteAddr(),
-						payload: b,
+						payload: b[tagLengthFieldSize+len(tag):],
 					}
 					select {
 					case pl.ch <- p:
@@ -314,6 +320,9 @@ func New(ctx context.Context, address string, tcfg *tls.Config) (*Mux, error) {
 						return
 					case <-m.closed:
 						return
+					default:
+						// If the listener isn't ready (packetConnBufferSize is
+						// full), drop the packet.
 					}
 				}
 			}()
@@ -484,6 +493,20 @@ type packetConn struct {
 }
 
 func (p *packetConn) Close() error {
+	p.n.m.mu.Lock()
+	defer p.n.m.mu.Unlock()
+	e, ok := p.n.m.packetEntries[p.n.tag]
+	if !ok {
+		return nil
+	}
+	e.n--
+	if e.n < 0 {
+		panic("removePacketEntry underflow")
+	}
+	if e.n == 0 {
+		close(e.ch)
+		delete(p.n.m.packetEntries, p.n.tag)
+	}
 	close(p.closed)
 	return nil
 }
@@ -544,30 +567,12 @@ func (n *Network) ListenPacket() (net.PacketConn, error) {
 	n.m.mu.Lock()
 	if _, ok := n.m.packetEntries[n.tag]; !ok {
 		n.m.packetEntries[n.tag] = &packetEntry{
-			ch: make(chan packet),
+			ch: make(chan packet, packetConnBufferSize),
 		}
 	}
 	n.m.packetEntries[n.tag].n++
 	ch := n.m.packetEntries[n.tag].ch
 	n.m.mu.Unlock()
-
-	// Remove when done
-	defer func() {
-		n.m.mu.Lock()
-		defer n.m.mu.Unlock()
-		e, ok := n.m.packetEntries[n.tag]
-		if !ok {
-			return
-		}
-		e.n--
-		if e.n < 0 {
-			panic("removePacketEntry underflow")
-		}
-		if e.n == 0 {
-			close(e.ch)
-			delete(n.m.packetEntries, n.tag)
-		}
-	}()
 
 	p := &packetConn{
 		n:      n,
