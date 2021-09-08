@@ -48,6 +48,22 @@ const packetConnBufferSize = 8
 var okMsg = []byte("OK")
 var noListenerMsg = []byte("NL")
 
+const useOfClosedErrString = "use of closed network connection"
+
+// IsClosed returns true if err represents a "use of closed connection" i/o
+// error.
+//
+// IsClosed can be used to detect when a listen port has been closed normally
+// and a listening loop should terminate, vs. some other error.
+func IsClosed(err error) bool {
+	if opErr, ok := err.(*net.OpError); ok {
+		if opErr.Err.Error() == useOfClosedErrString {
+			return true
+		}
+	}
+	return false
+}
+
 func readTag(r io.Reader) (string, error) {
 	buf := make([]byte, tagLengthFieldSize)
 	n, err := r.Read(buf)
@@ -216,12 +232,10 @@ func New(ctx context.Context, address string, tcfg *tls.Config) (*Mux, error) {
 		for {
 			session, err := l.Accept(ctx)
 			if err != nil {
-				if opErr, ok := err.(*net.OpError); ok {
-					if opErr.Err.Error() == "use of closed network connection" {
-						// Listener is closed, no more is coming, wrap up
-						m.doClose()
-						return
-					}
+				if IsClosed(err) {
+					// Listener is closed, no more is coming, wrap up
+					m.doClose()
+					return
 				}
 				m.nonBlockErr(err)
 				continue
@@ -235,11 +249,9 @@ func New(ctx context.Context, address string, tcfg *tls.Config) (*Mux, error) {
 				for {
 					stream, err := session.AcceptStream(ctx)
 					if err != nil {
-						if opErr, ok := err.(*net.OpError); ok {
-							if opErr.Err.Error() == "use of closed network connection" {
-								// Session is closed, no more is coming, wrap up
-								return
-							}
+						if IsClosed(err) {
+							// Session is closed, no more is coming, wrap up
+							return
 						}
 						m.nonBlockErr(err)
 						continue
@@ -285,11 +297,9 @@ func New(ctx context.Context, address string, tcfg *tls.Config) (*Mux, error) {
 				for {
 					b, err := session.ReceiveMessage()
 					if err != nil {
-						if opErr, ok := err.(*net.OpError); ok {
-							if opErr.Err.Error() == "use of closed network connection" {
-								// Session is closed, no more is coming, wrap up
-								return
-							}
+						if IsClosed(err) {
+							// Session is closed, no more is coming, wrap up
+							return
 						}
 						m.nonBlockErr(err)
 						continue
@@ -402,6 +412,10 @@ func (n *Network) DialContext(ctx context.Context, address string) (net.Conn, er
 	return nil, fmt.Errorf("quicmux: bad response %v", buf)
 }
 
+func (n *Network) LocalAddr() net.Addr {
+	return n.m.listener.Addr()
+}
+
 type streamListener struct {
 	n      *Network
 	closed chan struct{}
@@ -470,7 +484,7 @@ func (l *streamListener) AcceptContext(ctx context.Context) (net.Conn, error) {
 					Net:    l.Addr().Network(),
 					Source: nil,
 					Addr:   l.Addr(),
-					Err:    fmt.Errorf("use of closed network connection"),
+					Err:    fmt.Errorf(useOfClosedErrString),
 				}
 			}
 			return sc, nil
@@ -480,7 +494,7 @@ func (l *streamListener) AcceptContext(ctx context.Context) (net.Conn, error) {
 				Net:    l.Addr().Network(),
 				Source: nil,
 				Addr:   l.Addr(),
-				Err:    fmt.Errorf("use of closed network connection"),
+				Err:    fmt.Errorf(useOfClosedErrString),
 			}
 		}
 	}
@@ -524,7 +538,7 @@ func (p *packetConn) ReadFrom(buf []byte) (n int, addr net.Addr, err error) {
 				Net:    p.n.m.listener.Addr().Network(),
 				Source: nil,
 				Addr:   p.n.m.listener.Addr(),
-				Err:    fmt.Errorf("use of closed network connection"),
+				Err:    fmt.Errorf(useOfClosedErrString),
 			}
 		}
 		n = copy(buf, packet.payload)
@@ -537,7 +551,7 @@ func (p *packetConn) ReadFrom(buf []byte) (n int, addr net.Addr, err error) {
 			Net:    p.n.m.listener.Addr().Network(),
 			Source: nil,
 			Addr:   p.n.m.listener.Addr(),
-			Err:    fmt.Errorf("use of closed network connection"),
+			Err:    fmt.Errorf(useOfClosedErrString),
 		}
 	}
 }
