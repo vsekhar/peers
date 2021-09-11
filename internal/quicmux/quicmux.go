@@ -426,6 +426,7 @@ func (nl *streamListener) Addr() net.Addr {
 }
 
 func (nl *streamListener) Close() error {
+	close(nl.closed)
 	return nil
 }
 
