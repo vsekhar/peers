@@ -416,6 +416,12 @@ func (n *Network) LocalAddr() net.Addr {
 	return n.m.listener.Addr()
 }
 
+func (n *Network) Close() error {
+	close(n.closed)
+	// TODO: close open sockets?
+	return nil
+}
+
 type streamListener struct {
 	n      *Network
 	closed chan struct{}
