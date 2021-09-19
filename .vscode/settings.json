@@ -1,5 +1,6 @@
 {
     "[go]": {
         "editor.rulers": [80],
-    }
+    },
+    "go.testFlags": ["-race"],
 }
