@@ -9,6 +9,7 @@ require (
 	github.com/hashicorp/memberlist v0.2.4
 	github.com/hashicorp/serf v0.9.5
 	github.com/libp2p/go-reuseport v0.0.2
+	github.com/segmentio/fasthash v1.0.3
 	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9 // indirect
 	golang.org/x/net v0.0.0-20210428140749-89ef3d95e781 // indirect
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c // indirect

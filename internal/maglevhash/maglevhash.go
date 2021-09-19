@@ -1,43 +1,26 @@
+// Package maglevhash implements the hash function from Maglev, Google's fast
+// load balancer.
+//
+//   https://static.googleusercontent.com/media/research.google.com/en//pubs/archive/44824.pdf
 package maglevhash
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"fmt"
-	"hash/fnv"
+	"math"
 	"math/big"
-	"math/rand"
-	"runtime"
 	"sort"
-	"sync"
+
+	"github.com/segmentio/fasthash/fnv1a"
 )
 
-const coarsePrimeSafety = 5
-const finePrimeSafety = 1000
-
-func parDo(start, end int, f func(i int)) {
-	wg := sync.WaitGroup{}
-	workers := runtime.NumCPU()
-	jobsPerWorker := (end - start) / workers
-	remainder := (end - start) % workers
-	wg.Add(workers + 1)
-	for w := 0; w < workers; w++ {
-		go func(w int) {
-			for i := w * jobsPerWorker; i < ((w + 1) * jobsPerWorker); i++ {
-				f(i)
-			}
-			wg.Done()
-		}(w)
-	}
-	go func() {
-		for i := end - remainder; i < end; i++ {
-			f(i)
-		}
-		wg.Done()
-	}()
-	wg.Wait()
-}
-
 func nextPrime(n int) int {
+	const (
+		coarsePrimeSafety = 5
+		finePrimeSafety   = 1000
+	)
+
 	i := big.NewInt(int64(n))
 	one := big.NewInt(1)
 	for {
@@ -53,8 +36,10 @@ func nextPrime(n int) int {
 type MaglevHasher struct {
 	members []string
 	table   []int // indexes into 'members'
+	binSize uint64
 }
 
+// New creates a new MaglevHasher consisting of members.
 func New(members []string) (*MaglevHasher, error) {
 	sorted := append([]string(nil), members...)
 	sort.Strings(sorted)
@@ -68,54 +53,58 @@ func New(members []string) (*MaglevHasher, error) {
 		}
 	}
 
-	N := len(members)
+	N := len(sorted)
 	M := nextPrime(N * 100)
 
-	// permutation tables for each member, seeded by its name
-	p := make([][]int, N)
-	parDo(0, len(p), func(i int) {
-		name := members[i]
-		h := fnv.New32()
-		h.Write([]byte(name))
-		hashedName := h.Sum32()
-		permuter := rand.New(rand.NewSource(int64(hashedName)))
-		p[i] = make([]int, M)
-		for j := range p[i] {
-			p[i][j] = j
-		}
-		permuter.Shuffle(len(p[i]), func(a, b int) { p[i][a], p[i][b] = p[i][b], p[i][a] })
-	})
+	// For scaling integer arguments in the At method.
+	r.binSize = math.MaxUint64 / uint64(M)
 
-	var nSet int = 0
+	offsets := make([]int, N)
+	skips := make([]int, N)
+	nextIdxs := make([]int, N)
+	for i, m := range sorted {
+		v1 := fnv1a.HashString32(m)
+		h2 := sha1.Sum([]byte(m))
+		v2 := fnv1a.HashBytes32(h2[:])
+		offsets[i] = int(v1) % M
+		skips[i] = (int(v2) % (M - 1)) + 1
+	}
+
 	r.table = make([]int, M)
 	for i := 0; i < M; i++ {
 		r.table[i] = -1
 	}
-
-	// Cannot parallelize this step, or you get race conditions and end up with
-	// a non-deterministic and non-stable result.
-entries:
-	for i := 0; i < M; i++ {
-		for memberNo := range p {
-			preference := p[memberNo][i]
-			if r.table[preference] == -1 {
-				r.table[preference] = memberNo
+	var nSet int = 0
+fillLoop:
+	for {
+		for i := range sorted {
+			// next preference for member i
+			p := (offsets[i] + nextIdxs[i]*skips[i]) % M
+			nextIdxs[i]++
+			if r.table[p] == -1 {
+				r.table[p] = i
 				nSet++
-				if nSet >= M {
-					break entries
+				if nSet >= len(r.table) {
+					break fillLoop
 				}
 			}
 		}
 	}
-
 	return r, nil
 }
 
+// Get returns the member corresponding to value. Get takes care of evenly
+// distributing values across members.
 func (m *MaglevHasher) Get(value string) string {
-	h := fnv.New32()
-	h.Write([]byte(value))
-	s := h.Sum32()
-	return m.members[m.table[int(s)%len(m.table)]]
+	s := fnv1a.HashString64(value) // faster than stdlib fnv (63ns vs 213ns)
+	return m.At(s)
+}
+
+// At gets the member corresponding to i. At evenly distributes all possible
+// unsigned integers i across members.
+func (m *MaglevHasher) At(i uint64) string {
+	idx := i / m.binSize
+	return m.members[m.table[idx]]
 }
 
 func (m *MaglevHasher) dump() string {
