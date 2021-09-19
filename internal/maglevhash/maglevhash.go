@@ -15,9 +15,6 @@ import (
 	"github.com/segmentio/fasthash/fnv1a"
 )
 
-// TODO: implement backups (populate an array of members at each location in
-// the table?)
-
 // TODO: implement stable subsetting
 //   Concatenate n-length prefixes of hash of client_id (abcd...) and value
 //   (ABCD...):
@@ -31,6 +28,10 @@ import (
 //   We have membership, so we can use number of members to determine the
 //   starting value of n. E.g. if we want to have ~16 inbound cxns per host,
 //   and we have 1024 hosts, we can
+//
+//  Or use maglev technique to build stable subset of n members from a
+//  population of N members by filling out a table of size n (rather than of
+//  size N * 100 in the case of the usual maglev hasher).
 
 func nextPrime(n int) int {
 	const (
