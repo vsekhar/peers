@@ -9,6 +9,9 @@ import (
 	"gonum.org/v1/gonum/stat"
 )
 
+const benchmarkReplicas = 3
+const testReplicas = 3
+
 func BenchmarkNextPrime(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		nextPrime(i)
@@ -27,12 +30,12 @@ func BenchmarkNewIterations(b *testing.B) {
 	// goarch: amd64
 	// pkg: github.com/vsekhar/peers/internal/maglevhash
 	// cpu: Intel(R) Xeon(R) W-2135 CPU @ 3.70GHz
-	// BenchmarkNewIterations-12    	      99	  11787820 ns/op	  256735 B/op	    4091 allocs/op
+	// BenchmarkNewIterations-12    	      54	  21714886 ns/op	  901007 B/op	   14098 allocs/op
 
 	m := makeMembers("membername", 100)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := New(m)
+		_, err := New(m, benchmarkReplicas)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -44,11 +47,11 @@ func BenchmarkNewMembers(b *testing.B) {
 	// goarch: amd64
 	// pkg: github.com/vsekhar/peers/internal/maglevhash
 	// cpu: Intel(R) Xeon(R) W-2135 CPU @ 3.70GHz
-	// BenchmarkNewMembers/1_members-12         	     430	   2849691 ns/op	  165752 B/op	    4090 allocs/op
-	// BenchmarkNewMembers/10_members-12        	     320	   3794577 ns/op	  173761 B/op	    4134 allocs/op
-	// BenchmarkNewMembers/50_members-12        	     180	   7241607 ns/op	  207761 B/op	    4080 allocs/op
-	// BenchmarkNewMembers/100_members-12       	      98	  11602887 ns/op	  256734 B/op	    4091 allocs/op
-	// BenchmarkNewMembers/1000_members-12      	      10	 104412401 ns/op	 1008433 B/op	    4080 allocs/op
+	// BenchmarkNewMembers/1_members-12         	     386	   2915512 ns/op	  172403 B/op	    4191 allocs/op
+	// BenchmarkNewMembers/10_members-12        	     264	   4515776 ns/op	  238576 B/op	    5143 allocs/op
+	// BenchmarkNewMembers/50_members-12        	      97	  12707567 ns/op	  529828 B/op	    9083 allocs/op
+	// BenchmarkNewMembers/100_members-12       	      51	  21289694 ns/op	  900928 B/op	   14098 allocs/op
+	// BenchmarkNewMembers/1000_members-12      	       4	 281851129 ns/op	 7406030 B/op	  104083 allocs/op	    4080 allocs/op
 
 	memCount := []int{1, 10, 50, 100, 1000}
 	for _, c := range memCount {
@@ -56,7 +59,7 @@ func BenchmarkNewMembers(b *testing.B) {
 			m := makeMembers("membername", c)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, err := New(m)
+				_, err := New(m, benchmarkReplicas)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -70,9 +73,9 @@ func BenchmarkAt(b *testing.B) {
 	// goarch: amd64
 	// pkg: github.com/vsekhar/peers/internal/maglevhash
 	// cpu: Intel(R) Xeon(R) W-2135 CPU @ 3.70GHz
-	// BenchmarkAt-12    	24299367	        49.18 ns/op	       0 B/op	       0 allocs/op
+	// BenchmarkAt-12    	37780587	        31.03 ns/op	       0 B/op	       0 allocs/op
 
-	m, err := New(makeMembers("membername", 100))
+	m, err := New(makeMembers("membername", 100), benchmarkReplicas)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -87,10 +90,10 @@ func BenchmarkGet(b *testing.B) {
 	// goarch: amd64
 	// pkg: github.com/vsekhar/peers/internal/maglevhash
 	// cpu: Intel(R) Xeon(R) W-2135 CPU @ 3.70GHz
-	// BenchmarkGet-12    	18759733	        63.79 ns/op	       0 B/op	       0 allocs/op
+	// BenchmarkGet-12    	23996768	        49.94 ns/op	       0 B/op	       0 allocs/op
 
 	mems := makeMembers("membername", 100)
-	m, err := New(mems)
+	m, err := New(mems, benchmarkReplicas)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -101,18 +104,22 @@ func BenchmarkGet(b *testing.B) {
 }
 
 func TestHash(t *testing.T) {
-	m, err := New([]string{"hello"})
+	m, err := New([]string{"hello"}, testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Get("jacket") != "hello" {
-		t.Error("blah")
+	r := m.Get("jacket")
+	if r[0] != "hello" {
+		t.Error("did not get expected member (one member case)")
+	}
+	if len(r) != testReplicas {
+		t.Errorf("expected %d replicas, got %d", testReplicas, len(r))
 	}
 }
 
 func TestCoverage(t *testing.T) {
 	const N = 100
-	m, err := New(makeMembers("membername", N))
+	m, err := New(makeMembers("membername", N), testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,18 +129,15 @@ func TestCoverage(t *testing.T) {
 
 	// Ensure there is a member in every table entry
 	for i, e := range m.table {
-		if e < 0 {
+		if len(e) == 0 {
 			t.Errorf("no entry at position %d", i)
-		}
-		if int(e) >= len(m.members) {
-			t.Errorf("no matching member at table position %d (member #%d)", i, e)
 		}
 	}
 }
 
-func testDump(t *testing.T) {
+func TestDump(t *testing.T) {
 	t.Helper()
-	m, err := New(makeMembers("membername", 10))
+	m, err := New(makeMembers("membername", 10), 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,40 +159,42 @@ func testStat(t *testing.T, v []float64, mean, meanTolerance, minStdDev, maxStdD
 	}
 }
 
-func TestTableStats(t *testing.T) {
-	m, err := New(makeMembers("membername", 100))
+func TestTable(t *testing.T) {
+	m, err := New(makeMembers("membername", 100), testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tFloat := make([]float64, len(m.table))
-	for i := range m.table {
-		tFloat[i] = float64(m.table[i])
+	for i, replicas := range m.table {
+		if len(replicas) != testReplicas {
+			t.Errorf("table entry %d, expected %d replicas, got %d replicas", i, testReplicas, len(replicas))
+		}
+		uniqueR := make(map[string]struct{})
+		for _, r := range replicas {
+			uniqueR[r] = struct{}{}
+		}
+		if len(uniqueR) != len(replicas) {
+			t.Errorf("table entry %d, expected unique replicas, got %v", i, replicas)
+		}
 	}
-
-	const (
-		targetMean    = 50.0
-		meanTolerance = 1.0
-		minStdDev     = 25.0
-	)
-	testStat(t, tFloat, targetMean, meanTolerance, minStdDev, 1<<32)
 }
 
-func TestMemberEntryStats(t *testing.T) {
-	m, err := New(makeMembers("membername", 100))
+func TestFirstReplicaStats(t *testing.T) {
+	m, err := New(makeMembers("membername", 100), testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}
-	entryCounts := make(map[int]int)
+
+	entryCounts := make(map[string]int)
 	for _, memNo := range m.table {
-		entryCounts[memNo]++
+		entryCounts[memNo[0]]++
 	}
 	if len(entryCounts) != len(m.members) {
-		t.Errorf("some members have no entries")
+		t.Errorf("bad distribution: some members do not appear first")
 	}
-	entryCountsFloat := make([]float64, len(entryCounts))
-	for memNo, count := range entryCounts {
-		entryCountsFloat[memNo] = float64(count)
+	entryCountsFloat := make([]float64, 0, len(entryCounts))
+	for _, count := range entryCounts {
+		entryCountsFloat = append(entryCountsFloat, float64(count))
 	}
 	const (
 		targetMean    = 100.0
@@ -198,9 +204,21 @@ func TestMemberEntryStats(t *testing.T) {
 	testStat(t, entryCountsFloat, targetMean, meanTolerance, 0, maxStdDev)
 }
 
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestDeterministic(t *testing.T) {
 	members := makeMembers("membername", 100)
-	m1, err := New(members)
+	m1, err := New(members, testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,11 +226,11 @@ func TestDeterministic(t *testing.T) {
 	rand.Seed(42)
 	rand.Shuffle(len(members), func(i, j int) { members[i], members[j] = members[j], members[i] })
 
-	m2, err := New(members)
+	m2, err := New(members, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m1.Get("test123") != m2.Get("test123") {
+	if !equalStringSlice(m1.Get("test123"), m2.Get("test123")) {
 		t.Error("results are not deterministic")
 	}
 	for i := range m1.members {
@@ -221,7 +239,7 @@ func TestDeterministic(t *testing.T) {
 		}
 	}
 	for i := range m1.table {
-		if m1.table[i] != m2.table[i] {
+		if !equalStringSlice(m1.table[i], m2.table[i]) {
 			t.Fatal("tables do not match")
 		}
 	}
@@ -229,7 +247,7 @@ func TestDeterministic(t *testing.T) {
 
 func TestAtDistribution(t *testing.T) {
 	N := 100
-	m, err := New(makeMembers("membername", N))
+	m, err := New(makeMembers("membername", N), testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +260,7 @@ func TestAtDistribution(t *testing.T) {
 	}
 	names := make(map[string]int)
 	for _, p := range probes {
-		names[m.At(p)]++
+		names[m.At(p)[0]]++
 	}
 	counts := make([]float64, 0, len(names))
 	for _, v := range names {
@@ -263,7 +281,7 @@ func TestAtDistribution(t *testing.T) {
 
 func TestGetDistribution(t *testing.T) {
 	N := 100
-	m, err := New(makeMembers("membername", 100))
+	m, err := New(makeMembers("membername", 100), testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +290,7 @@ func TestGetDistribution(t *testing.T) {
 	probes := makeMembers("probename", probeCount) // unrelated to member names
 	names := make(map[string]int)
 	for _, p := range probes {
-		names[m.Get(p)]++
+		names[m.Get(p)[0]]++
 	}
 	counts := make([]float64, 0, len(names))
 	for _, v := range names {
@@ -291,7 +309,7 @@ func TestGetDistribution(t *testing.T) {
 }
 
 func TestBigAt(t *testing.T) {
-	m, err := New(makeMembers("membername", 100))
+	m, err := New(makeMembers("membername", 100), testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}

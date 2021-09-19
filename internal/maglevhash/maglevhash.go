@@ -15,6 +15,23 @@ import (
 	"github.com/segmentio/fasthash/fnv1a"
 )
 
+// TODO: implement backups (populate an array of members at each location in
+// the table?)
+
+// TODO: implement stable subsetting
+//   Concatenate n-length prefixes of hash of client_id (abcd...) and value
+//   (ABCD...):
+//
+//     Maglev(abcdABCD)
+//     Maglev(abcABC)
+//     Maglev(abAB)
+//     Maglev(aA)
+//     Maglev(-)
+//
+//   We have membership, so we can use number of members to determine the
+//   starting value of n. E.g. if we want to have ~16 inbound cxns per host,
+//   and we have 1024 hosts, we can
+
 func nextPrime(n int) int {
 	const (
 		coarsePrimeSafety = 5
@@ -34,19 +51,20 @@ func nextPrime(n int) int {
 }
 
 type MaglevHasher struct {
-	members []string
-	table   []int // indexes into 'members'
-	binSize uint64
+	replicas int
+	members  []string
+	table    [][]string // table[entryNo][replicaNo]
+	binSize  uint64
 }
 
 // New creates a new MaglevHasher consisting of members.
-func New(members []string) (*MaglevHasher, error) {
-	sorted := append([]string(nil), members...)
-	sort.Strings(sorted)
-	r := &MaglevHasher{
-		members: sorted,
+func New(members []string, replicas int) (*MaglevHasher, error) {
+	if replicas < 1 {
+		return nil, fmt.Errorf("replicas %d, must be greater than 0", replicas)
 	}
 
+	sorted := append([]string(nil), members...)
+	sort.Strings(sorted)
 	for i := 0; i < len(sorted)-1; i++ {
 		if sorted[i] == sorted[i+1] {
 			return nil, fmt.Errorf("duplicate member name '%s' in maglevhash.New", sorted[i])
@@ -56,8 +74,11 @@ func New(members []string) (*MaglevHasher, error) {
 	N := len(sorted)
 	M := nextPrime(N * 100)
 
-	// For scaling integer arguments in the At method.
-	r.binSize = math.MaxUint64 / uint64(M)
+	r := &MaglevHasher{
+		replicas: replicas,
+		members:  sorted,
+		binSize:  math.MaxUint64 / uint64(M),
+	}
 
 	offsets := make([]int, N)
 	skips := make([]int, N)
@@ -70,47 +91,53 @@ func New(members []string) (*MaglevHasher, error) {
 		skips[i] = (int(v2) % (M - 1)) + 1
 	}
 
-	r.table = make([]int, M)
-	for i := 0; i < M; i++ {
-		r.table[i] = -1
+	r.table = make([][]string, M)
+	for i := range r.table {
+		r.table[i] = make([]string, 0, replicas) // preallocate
 	}
-	var nSet int = 0
-fillLoop:
-	for {
-		for i := range sorted {
+	done := 0
+	// fillLoop:
+	for done < len(r.table) {
+		for i, name := range sorted {
 			// next preference for member i
 			p := (offsets[i] + nextIdxs[i]*skips[i]) % M
 			nextIdxs[i]++
-			if r.table[p] == -1 {
-				r.table[p] = i
-				nSet++
-				if nSet >= len(r.table) {
-					break fillLoop
+
+			if len(r.table[p]) < replicas {
+				r.table[p] = append(r.table[p], name)
+				if len(r.table[p]) == replicas {
+					done++
 				}
 			}
+
 		}
 	}
 	return r, nil
 }
 
-// Get returns the member corresponding to value. Get takes care of evenly
+// Replicas returns the number of replicas for each value in the hasher.
+func (m *MaglevHasher) Replicas() int {
+	return m.replicas
+}
+
+// Get returns the members corresponding to value. Get takes care of evenly
 // distributing values across members.
-func (m *MaglevHasher) Get(value string) string {
+func (m *MaglevHasher) Get(value string) []string {
 	s := fnv1a.HashString64(value) // faster than stdlib fnv (63ns vs 213ns)
 	return m.At(s)
 }
 
-// At gets the member corresponding to i. At evenly distributes all possible
+// At gets the members corresponding to i. At evenly distributes all possible
 // unsigned integers i across members.
-func (m *MaglevHasher) At(i uint64) string {
+func (m *MaglevHasher) At(i uint64) []string {
 	idx := i / m.binSize
-	return m.members[m.table[idx]]
+	return m.table[idx]
 }
 
 func (m *MaglevHasher) dump() string {
 	b := &bytes.Buffer{}
 	for i, memNo := range m.table {
-		fmt.Fprintf(b, "%d: %s\n", i, m.members[memNo])
+		fmt.Fprintf(b, "%d: %s\n", i, memNo)
 	}
 	return b.String()
 }
