@@ -12,19 +12,26 @@ import (
 const benchmarkReplicas = 3
 const testReplicas = 3
 
+var members []string
+var probes []string
+
+func init() {
+	members = make([]string, 1000)
+	for i := range members {
+		members[i] = fmt.Sprintf("member_%d", i)
+	}
+	probes = make([]string, 100000)
+	for i := range probes {
+		probes[i] = fmt.Sprintf("probe_%d", i)
+	}
+}
+
 func BenchmarkNextPrime(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		nextPrime(i)
 	}
 }
 
-func makeMembers(prefix string, n int) []string {
-	r := make([]string, n)
-	for i := range r {
-		r[i] = fmt.Sprintf("maglevhash_test_%s_%d", prefix, i)
-	}
-	return r
-}
 func BenchmarkNewIterations(b *testing.B) {
 	// goos: linux
 	// goarch: amd64
@@ -32,10 +39,9 @@ func BenchmarkNewIterations(b *testing.B) {
 	// cpu: Intel(R) Xeon(R) W-2135 CPU @ 3.70GHz
 	// BenchmarkNewIterations-12    	      54	  21714886 ns/op	  901007 B/op	   14098 allocs/op
 
-	m := makeMembers("membername", 100)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := New(m, benchmarkReplicas)
+		_, err := New(members, benchmarkReplicas)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -56,10 +62,9 @@ func BenchmarkNewMembers(b *testing.B) {
 	memCount := []int{1, 10, 50, 100, 1000}
 	for _, c := range memCount {
 		b.Run(fmt.Sprintf("%d_members", c), func(b *testing.B) {
-			m := makeMembers("membername", c)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, err := New(m, benchmarkReplicas)
+				_, err := New(members[:c], benchmarkReplicas)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -75,7 +80,7 @@ func BenchmarkAt(b *testing.B) {
 	// cpu: Intel(R) Xeon(R) W-2135 CPU @ 3.70GHz
 	// BenchmarkAt-12    	37780587	        31.03 ns/op	       0 B/op	       0 allocs/op
 
-	m, err := New(makeMembers("membername", 100), benchmarkReplicas)
+	m, err := New(members, benchmarkReplicas)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -92,8 +97,7 @@ func BenchmarkGet(b *testing.B) {
 	// cpu: Intel(R) Xeon(R) W-2135 CPU @ 3.70GHz
 	// BenchmarkGet-12    	23996768	        49.94 ns/op	       0 B/op	       0 allocs/op
 
-	mems := makeMembers("membername", 100)
-	m, err := New(mems, benchmarkReplicas)
+	m, err := New(members, benchmarkReplicas)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -103,13 +107,30 @@ func BenchmarkGet(b *testing.B) {
 	}
 }
 
+func BenchmarkGetWithCoalescingSubset(b *testing.B) {
+	// goos: linux
+	// goarch: amd64
+	// pkg: github.com/vsekhar/peers/internal/maglevhash
+	// cpu: Intel(R) Xeon(R) W-2135 CPU @ 3.70GHz
+	// BenchmarkGetWithCoalescingSubset-12    	20587340	        58.45 ns/op	       0 B/op	       0 allocs/op
+
+	m, err := New(members, benchmarkReplicas)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = m.GetWithCoalescingSubset("client", "testing", 4)
+	}
+}
+
 func TestHash(t *testing.T) {
-	m, err := New([]string{"hello"}, testReplicas)
+	m, err := New(members[:1], testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := m.Get("jacket")
-	if r[0] != "hello" {
+	if r[0] != members[0] {
 		t.Error("did not get expected member (one member case)")
 	}
 	if len(r) != testReplicas {
@@ -119,7 +140,7 @@ func TestHash(t *testing.T) {
 
 func TestCoverage(t *testing.T) {
 	const N = 100
-	m, err := New(makeMembers("membername", N), testReplicas)
+	m, err := New(members[:N], testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,9 +156,9 @@ func TestCoverage(t *testing.T) {
 	}
 }
 
-func TestDump(t *testing.T) {
+func testDump(t *testing.T) {
 	t.Helper()
-	m, err := New(makeMembers("membername", 10), 3)
+	m, err := New(members[:10], 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +181,7 @@ func testStat(t *testing.T, v []float64, mean, meanTolerance, minStdDev, maxStdD
 }
 
 func TestTable(t *testing.T) {
-	m, err := New(makeMembers("membername", 100), testReplicas)
+	m, err := New(members, testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +201,7 @@ func TestTable(t *testing.T) {
 }
 
 func TestFirstReplicaStats(t *testing.T) {
-	m, err := New(makeMembers("membername", 100), testReplicas)
+	m, err := New(members, testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +238,6 @@ func equalStringSlice(a, b []string) bool {
 }
 
 func TestDeterministic(t *testing.T) {
-	members := makeMembers("membername", 100)
 	m1, err := New(members, testReplicas)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +267,7 @@ func TestDeterministic(t *testing.T) {
 
 func TestAtDistribution(t *testing.T) {
 	N := 100
-	m, err := New(makeMembers("membername", N), testReplicas)
+	m, err := New(members[:N], testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,15 +301,14 @@ func TestAtDistribution(t *testing.T) {
 
 func TestGetDistribution(t *testing.T) {
 	N := 100
-	m, err := New(makeMembers("membername", 100), testReplicas)
+	m, err := New(members[:N], testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}
 	probesPerMember := 1000
 	probeCount := N * probesPerMember
-	probes := makeMembers("probename", probeCount) // unrelated to member names
 	names := make(map[string]int)
-	for _, p := range probes {
+	for _, p := range probes[:probeCount] {
 		names[m.Get(p)[0]]++
 	}
 	counts := make([]float64, 0, len(names))
@@ -309,10 +328,68 @@ func TestGetDistribution(t *testing.T) {
 }
 
 func TestBigAt(t *testing.T) {
-	m, err := New(makeMembers("membername", 100), testReplicas)
+	m, err := New(members, testReplicas)
 	if err != nil {
 		t.Fatal(err)
 	}
 	m.At(1 << 31)
 	m.At(1041972534)
+}
+
+func unique(s []string) bool {
+	for i := 0; i < len(s)-1; i++ {
+		if s[i] == s[i+1] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestCoalescing(t *testing.T) {
+	m, err := New(members, testReplicas)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Return the same members regardless of inputs at level==0
+	s1 := m.GetWithCoalescingSubset("abc", "123", 0)
+	s2 := m.GetWithCoalescingSubset("123", "abc", 0)
+	if !equalStringSlice(s1, s2) {
+		t.Errorf("members don't match: %v, %v", s1, s2)
+	}
+
+	if m.MaxBits() != 10 {
+		// 1000 members is covered by 2^10==1024 bits
+		t.Errorf("expected 10, got %d", m.MaxBits())
+	}
+
+	clientName := "test123"
+
+	// test stats
+	for _, bits := range []int{0, 1, 4, 8} {
+		t.Run(fmt.Sprintf("bits_%d", bits), func(t *testing.T) {
+			names := make(map[string]int)
+			for _, p := range probes {
+				names[m.GetWithCoalescingSubset(clientName, p, bits)[0]]++
+			}
+			uniquesDiff := len(names) - 1<<bits
+			if uniquesDiff < 0 {
+				uniquesDiff = -uniquesDiff
+			}
+			if uniquesDiff > (1 << bits / 10) {
+				t.Errorf("expected within 10%% of %d unique names, got %d", 1<<bits, len(names))
+			}
+			counts := make([]float64, 0, len(names))
+			for _, c := range names {
+				counts = append(counts, float64(c))
+			}
+			var (
+				targetMean    = float64(len(probes) / (1 << bits))
+				meanTolerance = 55.0
+				minStdDev     = 0.0
+				maxStdDev     = 1000.0
+			)
+			testStat(t, counts, targetMean, meanTolerance, minStdDev, maxStdDev)
+		})
+	}
 }
