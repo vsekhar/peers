@@ -109,7 +109,9 @@ func New(members []string, replicas int) (*MaglevHasher, error) {
 	for i := range r.table {
 		r.table[i] = make([]string, 0, replicas) // preallocate
 	}
-	fill("", sorted, r.table, replicas, false)
+	if len(members) > 0 {
+		fill("", sorted, r.table, replicas, false)
+	}
 	return r, nil
 }
 

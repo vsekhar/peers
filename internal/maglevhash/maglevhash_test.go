@@ -138,6 +138,19 @@ func TestHash(t *testing.T) {
 	}
 }
 
+func TestEmpty(t *testing.T) {
+	m, err := New(nil, testReplicas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalStringSlice(m.Get("test"), []string{}) {
+		t.Errorf("expected empty slice, got %v", m.Get("test"))
+	}
+	if !equalStringSlice(m.At(1), []string{}) {
+		t.Errorf("expected empty slice, got %v", m.At(1))
+	}
+}
+
 func TestCoverage(t *testing.T) {
 	const N = 100
 	m, err := New(members[:N], testReplicas)
