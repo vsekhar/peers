@@ -42,7 +42,7 @@ type MaglevHasher struct {
 
 func fill(key string, names []string, table [][]string, replicas int, unique bool) {
 	if replicas < 1 {
-		panic("replicas must be one or greater")
+		panic("replicas must be zero or greater")
 	}
 
 	N := len(names)
