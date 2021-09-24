@@ -9,6 +9,8 @@ import (
 	"math/big"
 )
 
+// TODO: use fixed config
+
 func GenerateTLSConfig() *tls.Config {
 	key, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
