@@ -24,6 +24,8 @@ import (
 	"go.opencensus.io/stats"
 )
 
+// TODO: move Maglevhasher to a client-side tree loadbalancer
+// TODO: connection pooling
 // TODO: opentelemetry
 
 const (
@@ -167,14 +169,13 @@ type Peers struct {
 
 func New(pctx context.Context, cfg Config) (*Peers, error) {
 	ctx, cancel := context.WithCancel(pctx)
-	if cfg.NodeName == "" {
-		if cfg.TLSConfig.ServerName == "" {
+	if cfg.TLSConfig.ServerName == "" {
+		cfg.TLSConfig = cfg.TLSConfig.Clone()
+		if cfg.NodeName == "" {
 			cfg.NodeName = uuid.New().String()
-		} else {
-			cfg.NodeName = cfg.TLSConfig.ServerName
 		}
+		cfg.TLSConfig.ServerName = cfg.NodeName
 	}
-	cfg.TLSConfig.ServerName = cfg.NodeName
 
 	rl, err := reuse.Listen("tcp", cfg.BindAddress)
 	if err != nil {
@@ -336,6 +337,18 @@ func (p *Peers) Join(nodes []string) (int, error) {
 	return p.serf.Join(nodes, true)
 }
 
+func (p *Peers) NumPeers() int {
+	return p.serf.NumNodes()
+}
+
+func (p *Peers) Members() []string {
+	r := make([]string, 0, p.NumPeers())
+	for _, p := range p.serf.Members() {
+		r = append(r, fmt.Sprintf("%s:%d", p.Addr.String(), p.Port))
+	}
+	return r
+}
+
 func (p *Peers) Shutdown() error {
 	if err := p.serf.Leave(); err != nil {
 		return err
@@ -389,8 +402,8 @@ func newTransport(parentCtx context.Context, l net.Listener, pl net.PacketConn, 
 				continue
 			}
 
-			// Check (and consume) protocol header (cmux already checked for it
-			// but doesn't comsume it, so it is buffered)
+			// Consume protocol tag (cmux already checked for it but doesn't
+			// comsume it, so it is buffered)
 			if err := consumeTagAndAck(c, serfNetTag); err != nil {
 				panic(err)
 			}
