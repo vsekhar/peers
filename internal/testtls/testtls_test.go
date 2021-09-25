@@ -15,7 +15,7 @@ func BenchmarkTLS(b *testing.B) {
 	// goarch: amd64
 	// pkg: github.com/vsekhar/peers
 	// cpu: Intel(R) Xeon(R) W-2135 CPU @ 3.70GHz
-	// BenchmarkTLS-12    	      21	  61607442 ns/op	 1107596 B/op	    6459 allocs/op
+	// BenchmarkTLS-12    	    3369	    330798 ns/op	   12701 B/op	     353 allocs/op
 	for i := 0; i < b.N; i++ {
 		_ = testtls.GenerateTLSConfig()
 	}
