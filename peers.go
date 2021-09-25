@@ -199,8 +199,8 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 	}
 	go func() {
 		<-ctx.Done()
-		if err := rl.Close(); err != nil {
-			log.Printf("peers: error closing listeniner: %v", err)
+		if err := rl.Close(); err != nil && cfg.Logger != nil {
+			cfg.Logger.Printf("peers: error closing listeniner: %v", err)
 		}
 	}()
 	tl := tls.NewListener(rl, cfg.TLSConfig)
@@ -211,7 +211,9 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 		if strings.Contains(err.Error(), "use of closed network connection") {
 			return false
 		}
-		log.Printf("peers: mux err: %v", err)
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("peers: mux err: %v", err)
+		}
 		return true
 	})
 
@@ -245,7 +247,9 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 
 	go func() {
 		if err := cm.Serve(); !strings.Contains(err.Error(), "use of closed network connection") {
-			log.Printf("cmux serve: %v", err)
+			if cfg.Logger != nil {
+				cfg.Logger.Printf("cmux serve: %v", err)
+			}
 		}
 	}()
 
@@ -294,7 +298,9 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 			}
 			m, err := maglevhash.New(names, hasherReplicas)
 			if err != nil {
-				log.Printf("maglevhash error: %v", err)
+				if cfg.Logger != nil {
+					cfg.Logger.Printf("maglevhash error: %v", err)
+				}
 				continue
 			}
 			p.storeMaglev(m)
