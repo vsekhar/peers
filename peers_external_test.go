@@ -47,7 +47,6 @@ func TestPeers(t *testing.T) {
 	}
 	// Provoke some UDP traffic
 	time.Sleep(5 * time.Second)
-	// TODO: use send packet somehow
 
 	p2.Shutdown()
 	p1.Shutdown()
