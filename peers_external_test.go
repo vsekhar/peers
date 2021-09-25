@@ -35,12 +35,10 @@ func parDo(ps []*peers.Peers, f func(p *peers.Peers, i int)) {
 	wg.Wait()
 }
 
-func TestPeers(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	const numPeers = 5
-	ps := make([]*peers.Peers, numPeers)
-	lbuf := new(syncbuf.Syncbuf)
-	logger := log.New(lbuf, "", log.LstdFlags|log.Lshortfile)
+func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) []*peers.Peers {
+	ps := make([]*peers.Peers, n)
+
+	// create
 	parDo(ps, func(p *peers.Peers, i int) {
 		cfg := peers.Config{
 			NodeName:  fmt.Sprintf("node%d", i),
@@ -53,7 +51,8 @@ func TestPeers(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	// a := ps[0].LocalAddr()
+
+	// connect
 	parDo(ps, func(p *peers.Peers, i int) {
 		n, err := p.Join([]string{ps[(i+1)%len(ps)].LocalAddr()})
 		if err != nil {
@@ -64,13 +63,26 @@ func TestPeers(t *testing.T) {
 		}
 
 	})
+
+	return ps
+}
+
+func TestPeers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	const numPeers = 5
+	lbuf := new(syncbuf.Syncbuf)
+	logger := log.New(lbuf, "", log.LstdFlags|log.Lshortfile)
+	ps := makeCluster(ctx, t, numPeers, logger)
+
 	time.Sleep(500 * time.Millisecond) // let peers gossip
+
 	parDo(ps, func(p *peers.Peers, i int) {
 		if p.NumPeers() != numPeers {
 			t.Errorf("peer %d has %d peers, expected %d peers", i, p.NumPeers(), numPeers)
 			t.Errorf("peers of %v: %v", p.LocalAddr(), p.Members())
 		}
 	})
+
 	parDo(ps, func(p *peers.Peers, _ int) {
 		p.Shutdown()
 	})
