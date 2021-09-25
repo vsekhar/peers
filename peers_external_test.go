@@ -19,19 +19,23 @@ func init() {
 	tlsConfig = testtls.GenerateTLSConfig()
 }
 
+// TODO: test p.Accept and p.DialNext
+
 func TestPeers(t *testing.T) {
 	lbuf := &bytes.Buffer{}
 	logger := log.New(lbuf, "", 0)
 	cfg := peers.Config{
-		TLSConfig: *tlsConfig,
+		TLSConfig: tlsConfig,
 		Logger:    logger,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	cfg.NodeName = "1"
 	p1, err := peers.New(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("p1 listening at: %s", p1.LocalAddr())
+	cfg.NodeName = "2"
 	p2, err := peers.New(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
