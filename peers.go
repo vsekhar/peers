@@ -2,27 +2,34 @@
 package peers // import "github.com/vsekhar/peers"
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/hashicorp/memberlist"
 	"github.com/hashicorp/serf/serf"
 	reuse "github.com/libp2p/go-reuseport"
-	"github.com/soheilhy/cmux"
 	"github.com/vsekhar/peers/internal/maglevhash"
 	"go.opencensus.io/stats"
 )
+
+// TODO: invert the muxing: peers needs a socket and packet listener from some
+// external mux. Can then use that same mux for peer RPC with tree balancer:
+//
+// - tls listener
+//   - mux
+//     - peers: consumes socket and udp lister, manages and discovers peers,
+//       notifies of membership changes
+//       - balancer: consumes membership changes, assigns "next peer" based
+//         on local name (for subsetting), value, and membership list
+//       - pool: manages pool of connections on demand to reach peers
+//         identified by the tree balancer
+//     - peer rpc server: listens via mux
 
 // TODO: move Maglevhasher to a client-side tree loadbalancer
 // TODO: package peerrpc: open a general grpc server and manage a pool of
@@ -33,11 +40,6 @@ import (
 // TODO: opentelemetry
 
 const (
-	serfNetTag = "psn"
-	// TODO: grpcNetTag = "pgr"
-	userNetTag = "pun"
-	tagAck     = "pok"
-
 	hasherReplicas = 3
 	peerTimeout    = 3 * time.Second
 )
@@ -46,79 +48,15 @@ var (
 	peerCount = stats.Int64("peers/measure/peerCount", "number of peers known to a host", stats.UnitDimensionless)
 )
 
+type Network interface {
+	net.Listener
+	DialContext(ctx context.Context, network, address string) (net.Conn, error)
+}
+
 func init() {
 	if !reuse.Available() {
 		panic("peers: OS must support SO_REUSEADDR and SO_REUSEPORT (darwin, linux, windows)")
 	}
-}
-
-func matchTag(tag string) func(r io.Reader) bool {
-	return func(r io.Reader) bool {
-		br := bufio.NewReader(io.LimitReader(r, int64(len(tag))))
-		l, part, err := br.ReadLine()
-		if err != nil || part {
-			return false
-		}
-		return bytes.Equal(l, []byte(tag))
-	}
-}
-
-func consumeTagAndAck(c net.Conn, tag string) error {
-	if !matchTag(tag)(c) {
-		return fmt.Errorf("failed to match and consume")
-	}
-	n, err := c.Write([]byte(tagAck))
-	if err != nil {
-		return err
-	}
-	if n != len(tagAck) {
-		return io.ErrShortWrite
-	}
-	return nil
-}
-
-func dialTimeout(address, tag string, tcfg *tls.Config, timeout time.Duration) (net.Conn, error) {
-	deadline := time.Now().Add(timeout)
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
-	defer cancel()
-	dialer := &tls.Dialer{Config: tcfg}
-	c, err := dialer.DialContext(ctx, "tcp", address)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.SetDeadline(deadline); err != nil {
-		c.Close()
-		return nil, err
-	}
-	n, err := c.Write([]byte(tag))
-	if err != nil {
-		c.Close()
-		return nil, err
-	}
-	if n != len(tag) {
-		c.Close()
-		return nil, io.ErrShortWrite
-	}
-	var buf [len(tagAck)]byte
-	n, err = c.Read(buf[:])
-	if err != nil {
-		c.Close()
-		return nil, err
-	}
-	if n != len(tagAck) {
-		c.Close()
-		return nil, fmt.Errorf("short read of tag ack")
-	}
-	if !bytes.Equal(buf[:], []byte(tagAck)) {
-		c.Close()
-		return nil, fmt.Errorf("bad ack")
-	}
-	if err := c.SetDeadline(time.Time{}); err != nil {
-		c.Close()
-		return nil, err
-	}
-
-	return c, nil
 }
 
 const maxPacketLength = 1024
@@ -145,17 +83,10 @@ func isClosed(err error) bool {
 
 // Config provides configuration parameters for a Host.
 type Config struct {
-	// NodeName is the name of the host. It must be unique within the cluster.
-	//
-	// If an empty name is provided, TLSConfig.ServerName will be used. If
-	// both are empty, a randomly-generated one will be used.
-	NodeName string
-
-	// BindAddress provides the local bind point in "host:port" format. If none
-	// is provided, peers will bind to a dynamically-assigned port.
-	BindAddress string
-	TLSConfig   *tls.Config
-	Logger      *log.Logger
+	NodeName   string
+	Network    Network
+	PacketConn net.PacketConn
+	Logger     *log.Logger
 }
 
 // Peers is the primary object of a peer.
@@ -163,13 +94,11 @@ type Peers struct {
 	ctx       context.Context
 	cancel    func()
 	config    Config
-	mux       cmux.CMux
 	transport memberlist.Transport
 	serf      *serf.Serf
 	maglev    atomic.Value // *maglevhash.MaglevHasher
 
-	addr  net.Addr
-	userL net.Listener
+	addr net.Addr
 }
 
 func New(pctx context.Context, cfg Config) (*Peers, error) {
@@ -184,53 +113,12 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 	//   |-- reuse.ListenPacket --> UDP traffic to Serf
 
 	ctx, cancel := context.WithCancel(pctx)
-	if cfg.TLSConfig.ServerName == "" {
-		cfg.TLSConfig = cfg.TLSConfig.Clone()
-		if cfg.NodeName == "" {
-			cfg.NodeName = uuid.New().String()
-		}
-		cfg.TLSConfig.ServerName = cfg.NodeName
-	}
-
-	rl, err := reuse.Listen("tcp", cfg.BindAddress)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	go func() {
-		<-ctx.Done()
-		if err := rl.Close(); err != nil && cfg.Logger != nil {
-			cfg.Logger.Printf("peers: error closing listeniner: %v", err)
-		}
-	}()
-	tl := tls.NewListener(rl, cfg.TLSConfig)
-	cm := cmux.New(tl)
-	serfL := cm.Match(matchTag(serfNetTag))
-	userL := cm.Match(matchTag(userNetTag))
-	cm.HandleError(func(err error) bool {
-		if strings.Contains(err.Error(), "use of closed network connection") {
-			return false
-		}
-		if cfg.Logger != nil {
-			cfg.Logger.Printf("peers: mux err: %v", err)
-		}
-		return true
-	})
-
-	var paddr string
-	if cfg.BindAddress == "" {
-		paddr = rl.Addr().String()
-	}
-	pl, err := reuse.ListenPacket("udp", paddr)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
 	scfg := serf.DefaultConfig()
 	scfg.NodeName = cfg.NodeName
 	scfg.Logger = cfg.Logger
 	scfg.MemberlistConfig = memberlist.DefaultLANConfig()
-	scfg.MemberlistConfig.Transport, err = newTransport(ctx, serfL, pl, cfg.TLSConfig)
+	var err error
+	scfg.MemberlistConfig.Transport, err = newTransport(ctx, cfg.Network, cfg.PacketConn)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -245,23 +133,13 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 		return nil, err
 	}
 
-	go func() {
-		if err := cm.Serve(); !strings.Contains(err.Error(), "use of closed network connection") {
-			if cfg.Logger != nil {
-				cfg.Logger.Printf("cmux serve: %v", err)
-			}
-		}
-	}()
-
 	p := &Peers{
 		ctx:       ctx,
 		cancel:    cancel,
 		config:    cfg,
-		mux:       cm,
 		transport: scfg.MemberlistConfig.Transport,
 		serf:      srf,
-		addr:      rl.Addr(),
-		userL:     userL,
+		addr:      cfg.Network.Addr(),
 	}
 
 	m, err := maglevhash.New([]string{}, hasherReplicas)
@@ -323,34 +201,6 @@ func (p *Peers) LocalAddr() string {
 	return p.addr.String()
 }
 
-func (p *Peers) Accept() (net.Conn, error) {
-	c, err := p.userL.Accept()
-	if err != nil {
-		return c, err
-	}
-	if err := consumeTagAndAck(c, userNetTag); err != nil {
-		c.Close()
-		return nil, err
-	}
-	return c, nil
-}
-
-func (p *Peers) DialNext(key string, bits int) (net.Conn, error) {
-	m := p.loadMaglev()
-	hosts := m.GetWithCoalescingSubset(p.config.NodeName, key, bits)
-	if len(hosts) == 0 {
-		return nil, fmt.Errorf("no hosts for key %s @ %d bits", key, bits)
-	}
-	for _, h := range hosts {
-		c, err := dialTimeout(h, userNetTag, p.config.TLSConfig, peerTimeout)
-		if err != nil {
-			continue
-		}
-		return c, nil
-	}
-	return nil, fmt.Errorf("could not connect to hosts for key %s @ %d bits, tried: %v", key, bits, hosts)
-}
-
 func (p *Peers) Join(nodes []string) (int, error) {
 	// Everything is eventually consistent, so we can't guarantee that messages
 	// will be delivered. Therefore don't bother trying to deliver old messages,
@@ -385,35 +235,33 @@ var _ memberlist.NodeAwareTransport = &peerTransport{}
 
 // Implements memberlist.Transport
 type peerTransport struct {
-	ctx      context.Context
-	cancel   func()
-	listener net.Listener
-	sch      chan net.Conn
-	pconn    net.PacketConn
-	pch      chan *memberlist.Packet
-	tlsCfg   *tls.Config
+	ctx     context.Context
+	cancel  func()
+	network Network
+	sch     chan net.Conn
+	pconn   net.PacketConn
+	pch     chan *memberlist.Packet
 }
 
-func newTransport(parentCtx context.Context, l net.Listener, pl net.PacketConn, tcfg *tls.Config) (*peerTransport, error) {
+func newTransport(parentCtx context.Context, n Network, pl net.PacketConn) (*peerTransport, error) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	r := &peerTransport{
-		ctx:      ctx,
-		cancel:   cancel,
-		listener: l,
-		sch:      make(chan net.Conn),
-		pconn:    pl,
-		pch:      make(chan *memberlist.Packet, packetBufferLength),
-		tlsCfg:   tcfg,
+		ctx:     ctx,
+		cancel:  cancel,
+		network: n,
+		sch:     make(chan net.Conn),
+		pconn:   pl,
+		pch:     make(chan *memberlist.Packet, packetBufferLength),
 	}
 
-	if l.Addr().String() != pl.LocalAddr().String() {
-		return nil, fmt.Errorf("address mismatch: %s and %s", l.Addr().String(), pl.LocalAddr().String())
+	if n.Addr().String() != pl.LocalAddr().String() {
+		return nil, fmt.Errorf("address mismatch: %s and %s", n.Addr().String(), pl.LocalAddr().String())
 	}
 
 	// Listen for and push new streams
 	go func() {
 		for {
-			c, err := r.listener.Accept()
+			c, err := n.Accept()
 			if err != nil {
 				if isClosed(err) {
 					close(r.sch)
@@ -421,12 +269,6 @@ func newTransport(parentCtx context.Context, l net.Listener, pl net.PacketConn, 
 				}
 				// TODO: log?
 				continue
-			}
-
-			// Consume protocol tag (cmux already checked for it but doesn't
-			// comsume it, so it is buffered)
-			if err := consumeTagAndAck(c, serfNetTag); err != nil {
-				panic(err)
 			}
 
 			// Get back to listening asap
@@ -528,7 +370,9 @@ func (p *peerTransport) PacketCh() <-chan *memberlist.Packet {
 // such as anti-entropy or fallback probes if the packet-oriented probe
 // failed.
 func (p *peerTransport) DialTimeout(addr string, timeout time.Duration) (net.Conn, error) {
-	return dialTimeout(addr, serfNetTag, p.tlsCfg, timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return p.network.DialContext(ctx, "tcp", addr)
 }
 
 // StreamCh returns a channel that can be read to handle incoming stream

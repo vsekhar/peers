@@ -10,9 +10,16 @@ import (
 	"testing"
 	"time"
 
+	reuse "github.com/libp2p/go-reuseport"
 	"github.com/vsekhar/peers"
+	"github.com/vsekhar/peers/internal/pmux"
 	"github.com/vsekhar/peers/internal/syncbuf"
 	"github.com/vsekhar/peers/internal/testtls"
+)
+
+const (
+	peerNetTag = "prn"
+	rpcNetTag  = "prc"
 )
 
 var tlsConfig *tls.Config
@@ -35,26 +42,54 @@ func goForEach(ps []*peers.Peers, f func(p *peers.Peers, i int)) {
 	wg.Wait()
 }
 
-func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) []*peers.Peers {
-	ps := make([]*peers.Peers, n)
+type testPeers struct {
+	peers        []*peers.Peers
+	rpcListeners []peers.Network
+}
+
+func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *testPeers {
+	r := &testPeers{
+		peers:        make([]*peers.Peers, n),
+		rpcListeners: make([]peers.Network, n),
+	}
 
 	// create
-	goForEach(ps, func(p *peers.Peers, i int) {
-		cfg := peers.Config{
-			NodeName:  fmt.Sprintf("node%d", i),
-			TLSConfig: tlsConfig,
-			Logger:    logger,
+	goForEach(r.peers, func(p *peers.Peers, i int) {
+		rl, err := reuse.Listen("tcp", ":0")
+		if err != nil {
+			t.Fatal(err)
 		}
-		var err error
-		ps[i], err = peers.New(ctx, cfg)
+		go func() {
+			<-ctx.Done()
+			if err := rl.Close(); err != nil && logger != nil {
+				logger.Printf("error closing listener %v", err)
+			}
+		}()
+		tcfg := tlsConfig.Clone()
+		tcfg.ServerName = fmt.Sprintf("peer%d", i)
+		tl := tls.NewListener(rl, tcfg)
+		td := &tls.Dialer{Config: tcfg}
+		pm := pmux.New(tl, td, logger, peerNetTag, rpcNetTag)
+		pl, err := reuse.ListenPacket("udp", rl.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := peers.Config{
+			NodeName:   tcfg.ServerName,
+			Network:    pm[peerNetTag],
+			PacketConn: pl,
+			Logger:     logger,
+		}
+		r.peers[i], err = peers.New(ctx, cfg)
+		r.rpcListeners[i] = pm[rpcNetTag]
 		if err != nil {
 			t.Fatal(err)
 		}
 	})
 
 	// connect
-	goForEach(ps, func(p *peers.Peers, i int) {
-		n, err := p.Join([]string{ps[(i+1)%len(ps)].LocalAddr()})
+	goForEach(r.peers, func(p *peers.Peers, i int) {
+		n, err := p.Join([]string{r.peers[(i+1)%len(r.peers)].LocalAddr()})
 		if err != nil {
 			t.Error(err)
 		}
@@ -64,7 +99,7 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) [
 
 	})
 
-	return ps
+	return r
 }
 
 func TestPeers(t *testing.T) {
@@ -76,14 +111,14 @@ func TestPeers(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond) // let peers gossip
 
-	goForEach(ps, func(p *peers.Peers, i int) {
+	goForEach(ps.peers, func(p *peers.Peers, i int) {
 		if p.NumPeers() != numPeers {
 			t.Errorf("peer %d has %d peers, expected %d peers", i, p.NumPeers(), numPeers)
 			t.Errorf("peers of %v: %v", p.LocalAddr(), p.Members())
 		}
 	})
 
-	goForEach(ps, func(p *peers.Peers, _ int) {
+	goForEach(ps.peers, func(p *peers.Peers, _ int) {
 		p.Shutdown()
 	})
 	cancel()
