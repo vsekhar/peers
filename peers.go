@@ -25,11 +25,16 @@ import (
 )
 
 // TODO: move Maglevhasher to a client-side tree loadbalancer
-// TODO: connection pooling
+// TODO: package peerrpc: open a general grpc server and manage a pool of
+// general grpc channels (effectively connections). User can wrap these in the
+// service stub.
+//   Dial: use dial options WithContextDialer and WithInsecure (TLS below)
+//   Server: start on a listener and register service
 // TODO: opentelemetry
 
 const (
 	serfNetTag = "psn"
+	// TODO: grpcNetTag = "pgr"
 	userNetTag = "pun"
 	tagAck     = "pok"
 
