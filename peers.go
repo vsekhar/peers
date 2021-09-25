@@ -86,7 +86,7 @@ func dialTimeout(address, tag string, tcfg *tls.Config, timeout time.Duration) (
 	if err != nil {
 		return nil, err
 	}
-	if err := c.SetWriteDeadline(deadline); err != nil {
+	if err := c.SetDeadline(deadline); err != nil {
 		c.Close()
 		return nil, err
 	}
@@ -98,10 +98,6 @@ func dialTimeout(address, tag string, tcfg *tls.Config, timeout time.Duration) (
 	if n != len(tag) {
 		c.Close()
 		return nil, io.ErrShortWrite
-	}
-	if err := c.SetWriteDeadline(time.Time{}); err != nil {
-		c.Close()
-		return nil, err
 	}
 	var buf [len(tagAck)]byte
 	n, err = c.Read(buf[:])
@@ -116,6 +112,10 @@ func dialTimeout(address, tag string, tcfg *tls.Config, timeout time.Duration) (
 	if !bytes.Equal(buf[:], []byte(tagAck)) {
 		c.Close()
 		return nil, fmt.Errorf("bad ack")
+	}
+	if err := c.SetDeadline(time.Time{}); err != nil {
+		c.Close()
+		return nil, err
 	}
 
 	return c, nil
