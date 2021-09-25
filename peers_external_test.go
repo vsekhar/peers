@@ -28,8 +28,6 @@ func init() {
 	tlsConfig = testtls.GenerateTLSConfig()
 }
 
-// TODO: test p.Accept and p.DialNext
-
 func goForEach(ps []*peers.Peers, f func(p *peers.Peers, i int)) {
 	wg := sync.WaitGroup{}
 	wg.Add(len(ps))
@@ -44,7 +42,7 @@ func goForEach(ps []*peers.Peers, f func(p *peers.Peers, i int)) {
 
 type testPeers struct {
 	peers        []*peers.Peers
-	rpcListeners []peers.Network
+	rpcListeners []peers.Transport
 }
 
 func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *testPeers {
@@ -59,7 +57,7 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *
 
 	r := &testPeers{
 		peers:        make([]*peers.Peers, n),
-		rpcListeners: make([]peers.Network, n),
+		rpcListeners: make([]peers.Transport, n),
 	}
 
 	// create
@@ -85,7 +83,7 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *
 		}
 		cfg := peers.Config{
 			NodeName:   tcfg.ServerName,
-			Network:    pm[peerNetTag],
+			Transport:  pm[peerNetTag],
 			PacketConn: pl,
 			Logger:     logger,
 		}

@@ -58,19 +58,19 @@ type ContextDialer interface {
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
 }
 
-type Network interface {
+type Transport interface {
 	net.Listener
 	ContextDialer
 }
 
-type network struct {
+type transport struct {
 	net.Listener
 	ContextDialer
 	tag string
 }
 
-func (pn network) DialContext(ctx context.Context, network, address string) (c net.Conn, err error) {
-	c, err = pn.ContextDialer.DialContext(ctx, network, address)
+func (t transport) DialContext(ctx context.Context, network, address string) (c net.Conn, err error) {
+	c, err = t.ContextDialer.DialContext(ctx, network, address)
 	if err != nil {
 		return
 	}
@@ -78,11 +78,11 @@ func (pn network) DialContext(ctx context.Context, network, address string) (c n
 	if err = c.SetDeadline(deadline); err != nil {
 		return
 	}
-	n, err := c.Write([]byte(pn.tag))
+	n, err := c.Write([]byte(t.tag))
 	if err != nil {
 		return
 	}
-	if n != len(pn.tag) {
+	if n != len(t.tag) {
 		return c, io.ErrShortWrite
 	}
 	if !matchTag(tagAck)(c) {
@@ -91,11 +91,11 @@ func (pn network) DialContext(ctx context.Context, network, address string) (c n
 	return
 }
 
-func New(l net.Listener, c ContextDialer, logger *log.Logger, tags ...string) map[string]Network {
-	r := make(map[string]Network)
+func New(l net.Listener, c ContextDialer, logger *log.Logger, tags ...string) map[string]Transport {
+	r := make(map[string]Transport)
 	cm := cmux.New(l)
 	for _, t := range tags {
-		r[t] = &network{
+		r[t] = &transport{
 			Listener: &tagConsumer{
 				Listener: cm.Match(matchTag(t)),
 				tag:      t,
