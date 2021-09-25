@@ -8,55 +8,22 @@ import (
 	"log"
 	"net"
 	"strconv"
-	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/memberlist"
 	"github.com/hashicorp/serf/serf"
-	reuse "github.com/libp2p/go-reuseport"
-	"github.com/vsekhar/peers/internal/maglevhash"
-	"go.opencensus.io/stats"
+	"github.com/vsekhar/peers/internal/singlego"
 )
 
-// TODO: invert the muxing: peers needs a socket and packet listener from some
-// external mux. Can then use that same mux for peer RPC with tree balancer:
-//
-// - tls listener
-//   - mux
-//     - peers: consumes socket and udp lister, manages and discovers peers,
-//       notifies of membership changes
-//       - balancer: consumes membership changes, assigns "next peer" based
-//         on local name (for subsetting), value, and membership list
-//       - pool: manages pool of connections on demand to reach peers
-//         identified by the tree balancer
-//     - peer rpc server: listens via mux
-
-// TODO: move Maglevhasher to a client-side tree loadbalancer
 // TODO: package peerrpc: open a general grpc server and manage a pool of
 // general grpc channels (effectively connections). User can wrap these in the
 // service stub.
 //   Dial: use dial options WithContextDialer and WithInsecure (TLS below)
 //   Server: start on a listener and register service
-// TODO: opentelemetry
-
-const (
-	hasherReplicas = 3
-	peerTimeout    = 3 * time.Second
-)
-
-var (
-	peerCount = stats.Int64("peers/measure/peerCount", "number of peers known to a host", stats.UnitDimensionless)
-)
 
 type Network interface {
 	net.Listener
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
-}
-
-func init() {
-	if !reuse.Available() {
-		panic("peers: OS must support SO_REUSEADDR and SO_REUSEPORT (darwin, linux, windows)")
-	}
 }
 
 const maxPacketLength = 1024
@@ -87,31 +54,29 @@ type Config struct {
 	Network    Network
 	PacketConn net.PacketConn
 	Logger     *log.Logger
+
+	// MemberNotify is called from its own goroutine when membership changes
+	// occur. Only one call of MemberNotify will be active at a time, so a
+	// previous call must return for subsequent calls to be made.
+	//
+	// MemberNotify will typically call Members to get the current list of
+	// members.
+	MemberNotify func()
 }
 
 // Peers is the primary object of a peer.
 type Peers struct {
-	ctx       context.Context
-	cancel    func()
-	config    Config
-	transport memberlist.Transport
-	serf      *serf.Serf
-	maglev    atomic.Value // *maglevhash.MaglevHasher
+	ctx          context.Context
+	cancel       func()
+	config       Config
+	transport    memberlist.Transport
+	serf         *serf.Serf
+	memberNotify singlego.Trigger
 
 	addr net.Addr
 }
 
 func New(pctx context.Context, cfg Config) (*Peers, error) {
-	// cfg.BindAddr
-	//   |
-	//   |-- reuse.Listen
-	//   |     |-- tls.Listener
-	//   |           |-- cmux
-	//   |                 |-- Match(serfNetTag) --> memberlist.Transport --> TCP traffic to serf
-	//   |                 |-- Match(userNetTag) --> peers.Accept() --> user code
-	//   |
-	//   |-- reuse.ListenPacket --> UDP traffic to Serf
-
 	ctx, cancel := context.WithCancel(pctx)
 	scfg := serf.DefaultConfig()
 	scfg.NodeName = cfg.NodeName
@@ -134,67 +99,34 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 	}
 
 	p := &Peers{
-		ctx:       ctx,
-		cancel:    cancel,
-		config:    cfg,
-		transport: scfg.MemberlistConfig.Transport,
-		serf:      srf,
-		addr:      cfg.Network.Addr(),
+		ctx:          ctx,
+		cancel:       cancel,
+		config:       cfg,
+		transport:    scfg.MemberlistConfig.Transport,
+		serf:         srf,
+		memberNotify: singlego.New(ctx, cfg.MemberNotify),
+		addr:         cfg.Network.Addr(),
 	}
-
-	m, err := maglevhash.New([]string{}, hasherReplicas)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	p.storeMaglev(m)
 
 	// Listen for membership changes and trigger update of maglevhash
-	triggerCh := make(chan struct{}, 1) // buffer required
 	go func() {
-		for e := range ech {
-			switch e.(type) {
-			case serf.MemberEvent:
-				select {
-				case triggerCh <- struct{}{}:
+		for {
+			select {
+			case e := <-ech:
+				switch e.(type) {
+				case serf.MemberEvent:
+					p.memberNotify.Notify()
+				case serf.UserEvent: // unused
 				default:
+					panic("unknown event type")
 				}
-			case serf.UserEvent: // unused
-			default:
+			case <-ctx.Done():
+				return
 			}
-		}
-		close(triggerCh)
-	}()
-
-	// Update maglevhash
-	go func() {
-		for range triggerCh {
-			members := srf.Members()
-			names := make([]string, len(members))
-			for i, member := range members {
-				names[i] = fmt.Sprintf("%s:%d", member.Addr.String(), member.Port)
-			}
-			m, err := maglevhash.New(names, hasherReplicas)
-			if err != nil {
-				if cfg.Logger != nil {
-					cfg.Logger.Printf("maglevhash error: %v", err)
-				}
-				continue
-			}
-			p.storeMaglev(m)
-			stats.Record(context.Background(), peerCount.M(int64(m.Len())))
 		}
 	}()
 
 	return p, nil
-}
-
-func (p *Peers) storeMaglev(m *maglevhash.MaglevHasher) {
-	p.maglev.Store(m)
-}
-
-func (p *Peers) loadMaglev() *maglevhash.MaglevHasher {
-	return p.maglev.Load().(*maglevhash.MaglevHasher)
 }
 
 func (p *Peers) LocalAddr() string {
@@ -370,7 +302,7 @@ func (p *peerTransport) PacketCh() <-chan *memberlist.Packet {
 // such as anti-entropy or fallback probes if the packet-oriented probe
 // failed.
 func (p *peerTransport) DialTimeout(addr string, timeout time.Duration) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(p.ctx, timeout)
 	defer cancel()
 	return p.network.DialContext(ctx, "tcp", addr)
 }

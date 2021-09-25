@@ -48,6 +48,15 @@ type testPeers struct {
 }
 
 func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *testPeers {
+	//  OS
+	//   |-- reuse.Listen
+	//   |     |-- tls.Listener
+	//   |           |-- cmux
+	//   |                 |-- Match(serfNetTag) --> memberlist.Transport --> TCP traffic to serf
+	//   |                 |-- Match(userNetTag) --> peers.Accept() --> user code
+	//   |
+	//   |-- reuse.ListenPacket(same addr) --> UDP traffic to Serf
+
 	r := &testPeers{
 		peers:        make([]*peers.Peers, n),
 		rpcListeners: make([]peers.Network, n),
@@ -123,6 +132,7 @@ func TestPeers(t *testing.T) {
 	})
 	cancel()
 
+	// TODO: fix flakiness with list of errors that don't matter, ignore them
 	lbuf.Close()
 	logs := lbuf.String()
 	if len(logs) == 0 {
