@@ -16,7 +16,6 @@ import (
 var tlsConfig *tls.Config
 
 func init() {
-	// TODO: convert to a static config?
 	tlsConfig = testtls.GenerateTLSConfig()
 }
 
@@ -48,6 +47,7 @@ func TestPeers(t *testing.T) {
 	}
 	// Provoke some UDP traffic
 	time.Sleep(5 * time.Second)
+	// TODO: use send packet somehow
 
 	p2.Shutdown()
 	p1.Shutdown()

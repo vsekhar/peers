@@ -12,6 +12,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/cmux"
@@ -19,11 +20,14 @@ import (
 	"github.com/hashicorp/memberlist"
 	"github.com/hashicorp/serf/serf"
 	reuse "github.com/libp2p/go-reuseport"
+	"github.com/vsekhar/peers/internal/maglevhash"
 )
 
 const (
 	serfNetTag = "psn"
 	rpcNetTag  = "rpc"
+
+	hasherReplicas = 3
 )
 
 func init() {
@@ -69,7 +73,8 @@ func isClosed(err error) bool {
 type Config struct {
 	// NodeName is the name of the host. It must be unique within the cluster.
 	//
-	// If an empty name is provided, a randomly-generated one will be used.
+	// If an empty name is provided, TLSConfig.ServerName will be used. If
+	// both are empty, a randomly-generated one will be used.
 	NodeName string
 
 	// BindAddress provides the local bind point in "host:port" format. If none
@@ -86,6 +91,7 @@ type Peers struct {
 	config Config
 	mux    cmux.CMux
 	serf   *serf.Serf
+	maglev atomic.Value // *maglevhash.MaglevHasher
 
 	addr net.Addr
 }
@@ -103,6 +109,7 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 
 	l, err := reuse.Listen("tcp", cfg.BindAddress)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	go func() {
@@ -128,19 +135,25 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 	}
 	pl, err := reuse.ListenPacket("udp", paddr)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	scfg := serf.DefaultConfig()
 	scfg.NodeName = cfg.NodeName
 	scfg.Logger = cfg.Logger
 	scfg.MemberlistConfig = memberlist.DefaultLANConfig()
-	scfg.MemberlistConfig.Transport, err = NewTransport(ctx, serfL, pl)
+	scfg.MemberlistConfig.Transport, err = newTransport(ctx, serfL, pl)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	scfg.MemberlistConfig.Logger = cfg.Logger
+
+	ech := make(chan serf.Event)
+	scfg.EventCh = ech
 	srf, err := serf.Create(scfg)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 
@@ -150,14 +163,65 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 		}
 	}()
 
-	return &Peers{
+	p := &Peers{
 		ctx:    ctx,
 		cancel: cancel,
 		config: cfg,
 		mux:    cm,
 		serf:   srf,
 		addr:   l.Addr(),
-	}, nil
+	}
+
+	m, err := maglevhash.New([]string{}, hasherReplicas)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	p.storeMaglev(m)
+
+	// Listen for membership changes and trigger update of maglevhash
+	triggerCh := make(chan struct{}, 1) // buffer required
+	go func() {
+		for e := range ech {
+			switch e.(type) {
+			case serf.MemberEvent:
+				select {
+				case triggerCh <- struct{}{}:
+				default:
+				}
+			case serf.UserEvent: // unused
+			default:
+			}
+		}
+		close(triggerCh)
+	}()
+
+	// Update maglevhash
+	go func() {
+		for range triggerCh {
+			members := srf.Members()
+			names := make([]string, len(members))
+			for i, member := range members {
+				names[i] = fmt.Sprintf("%s:%d", member.Addr.String(), member.Port)
+			}
+			m, err := maglevhash.New(names, hasherReplicas)
+			if err != nil {
+				log.Printf("maglevhash error: %v", err)
+				continue
+			}
+			p.storeMaglev(m)
+		}
+	}()
+
+	return p, nil
+}
+
+func (p *Peers) storeMaglev(m *maglevhash.MaglevHasher) {
+	p.maglev.Store(m)
+}
+
+func (p *Peers) loadMaglev() *maglevhash.MaglevHasher {
+	return p.maglev.Load().(*maglevhash.MaglevHasher)
 }
 
 func (p *Peers) LocalAddr() string {
@@ -200,7 +264,7 @@ type peerTransport struct {
 	pch      chan *memberlist.Packet
 }
 
-func NewTransport(parentCtx context.Context, l net.Listener, pl net.PacketConn) (*peerTransport, error) {
+func newTransport(parentCtx context.Context, l net.Listener, pl net.PacketConn) (*peerTransport, error) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	r := &peerTransport{
 		ctx:      ctx,
@@ -229,7 +293,7 @@ func NewTransport(parentCtx context.Context, l net.Listener, pl net.PacketConn) 
 			}
 
 			// Check (and consume) protocol header (cmux already checked for it
-			// but doesn't comsume it)
+			// but doesn't comsume it, so it is buffered)
 			if !matchTag(serfNetTag)(c) {
 				panic("peers: tag not found")
 			}
