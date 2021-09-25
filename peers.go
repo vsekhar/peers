@@ -168,6 +168,16 @@ type Peers struct {
 }
 
 func New(pctx context.Context, cfg Config) (*Peers, error) {
+	// cfg.BindAddr
+	//   |
+	//   |-- reuse.Listen
+	//   |     |-- tls.Listener
+	//   |           |-- cmux
+	//   |                 |-- Match(serfNetTag) --> memberlist.Transport --> TCP traffic to serf
+	//   |                 |-- Match(userNetTag) --> peers.Accept() --> user code
+	//   |
+	//   |-- reuse.ListenPacket --> UDP traffic to Serf
+
 	ctx, cancel := context.WithCancel(pctx)
 	if cfg.TLSConfig.ServerName == "" {
 		cfg.TLSConfig = cfg.TLSConfig.Clone()
