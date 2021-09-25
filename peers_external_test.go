@@ -23,7 +23,7 @@ func init() {
 
 // TODO: test p.Accept and p.DialNext
 
-func parDo(ps []*peers.Peers, f func(p *peers.Peers, i int)) {
+func goForEach(ps []*peers.Peers, f func(p *peers.Peers, i int)) {
 	wg := sync.WaitGroup{}
 	wg.Add(len(ps))
 	for i := range ps {
@@ -39,7 +39,7 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) [
 	ps := make([]*peers.Peers, n)
 
 	// create
-	parDo(ps, func(p *peers.Peers, i int) {
+	goForEach(ps, func(p *peers.Peers, i int) {
 		cfg := peers.Config{
 			NodeName:  fmt.Sprintf("node%d", i),
 			TLSConfig: tlsConfig,
@@ -53,7 +53,7 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) [
 	})
 
 	// connect
-	parDo(ps, func(p *peers.Peers, i int) {
+	goForEach(ps, func(p *peers.Peers, i int) {
 		n, err := p.Join([]string{ps[(i+1)%len(ps)].LocalAddr()})
 		if err != nil {
 			t.Error(err)
@@ -76,14 +76,14 @@ func TestPeers(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond) // let peers gossip
 
-	parDo(ps, func(p *peers.Peers, i int) {
+	goForEach(ps, func(p *peers.Peers, i int) {
 		if p.NumPeers() != numPeers {
 			t.Errorf("peer %d has %d peers, expected %d peers", i, p.NumPeers(), numPeers)
 			t.Errorf("peers of %v: %v", p.LocalAddr(), p.Members())
 		}
 	})
 
-	parDo(ps, func(p *peers.Peers, _ int) {
+	goForEach(ps, func(p *peers.Peers, _ int) {
 		p.Shutdown()
 	})
 	cancel()
