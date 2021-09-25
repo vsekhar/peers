@@ -106,7 +106,7 @@ func New(l net.Listener, c ContextDialer, logger *log.Logger, tags ...string) ma
 	}
 	cm.HandleError(func(err error) bool {
 		if strings.Contains(err.Error(), "use of closed network connection") {
-			return false
+			return false // stop serving
 		}
 		if logger != nil {
 			logger.Printf("peers: mux err: %v", err)

@@ -11,10 +11,10 @@ import (
 	"github.com/hashicorp/memberlist"
 )
 
-var _ memberlist.NodeAwareTransport = &peerTransport{}
+var _ memberlist.NodeAwareTransport = &serfTransport{}
 
 // Implements memberlist.Transport
-type peerTransport struct {
+type serfTransport struct {
 	ctx       context.Context
 	cancel    func()
 	transport Transport
@@ -23,9 +23,9 @@ type peerTransport struct {
 	pch       chan *memberlist.Packet
 }
 
-func newTransport(parentCtx context.Context, t Transport, pl net.PacketConn) (*peerTransport, error) {
+func newTransport(parentCtx context.Context, t Transport, pl net.PacketConn) (*serfTransport, error) {
 	ctx, cancel := context.WithCancel(parentCtx)
-	r := &peerTransport{
+	r := &serfTransport{
 		ctx:       ctx,
 		cancel:    cancel,
 		transport: t,
@@ -96,7 +96,7 @@ func newTransport(parentCtx context.Context, t Transport, pl net.PacketConn) (*p
 // FinalAdvertiseAddr is given the user's configured values (which
 // might be empty) and returns the desired IP and port to advertise to
 // the rest of the cluster.
-func (p *peerTransport) FinalAdvertiseAddr(_ string, _ int) (net.IP, int, error) {
+func (p *serfTransport) FinalAdvertiseAddr(_ string, _ int) (net.IP, int, error) {
 	a := p.pconn.LocalAddr()
 	addr, portStr, err := net.SplitHostPort(a.String())
 	if err != nil {
@@ -120,7 +120,7 @@ func (p *peerTransport) FinalAdvertiseAddr(_ string, _ int) (net.IP, int, error)
 // underlying plumbing to a minimum. We also treat the address here as a
 // string, similar to Dial, so it's network neutral, so this usually is
 // in the form of "host:port".
-func (p *peerTransport) WriteTo(b []byte, addr string) (time.Time, error) {
+func (p *serfTransport) WriteTo(b []byte, addr string) (time.Time, error) {
 	// TODO: cache these
 	uaddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
@@ -140,7 +140,7 @@ func (p *peerTransport) WriteTo(b []byte, addr string) (time.Time, error) {
 // PacketCh returns a channel that can be read to receive incoming
 // packets from other peers. How this is set up for listening is left as
 // an exercise for the concrete transport implementations.
-func (p *peerTransport) PacketCh() <-chan *memberlist.Packet {
+func (p *serfTransport) PacketCh() <-chan *memberlist.Packet {
 	return p.pch
 }
 
@@ -149,7 +149,7 @@ func (p *peerTransport) PacketCh() <-chan *memberlist.Packet {
 // than packet connections so is used for more infrequent operations
 // such as anti-entropy or fallback probes if the packet-oriented probe
 // failed.
-func (p *peerTransport) DialTimeout(addr string, timeout time.Duration) (net.Conn, error) {
+func (p *serfTransport) DialTimeout(addr string, timeout time.Duration) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(p.ctx, timeout)
 	defer cancel()
 	return p.transport.DialContext(ctx, "tcp", addr)
@@ -158,21 +158,21 @@ func (p *peerTransport) DialTimeout(addr string, timeout time.Duration) (net.Con
 // StreamCh returns a channel that can be read to handle incoming stream
 // connections from other peers. How this is set up for listening is
 // left as an exercise for the concrete transport implementations.
-func (p *peerTransport) StreamCh() <-chan net.Conn {
+func (p *serfTransport) StreamCh() <-chan net.Conn {
 	return p.sch
 }
 
 // Shutdown is called when memberlist is shutting down; this gives the
 // transport a chance to clean up any listeners.
-func (p *peerTransport) Shutdown() error {
+func (p *serfTransport) Shutdown() error {
 	p.cancel()
 	return nil
 }
 
-func (p *peerTransport) WriteToAddress(b []byte, addr memberlist.Address) (time.Time, error) {
+func (p *serfTransport) WriteToAddress(b []byte, addr memberlist.Address) (time.Time, error) {
 	return p.WriteTo(b, addr.Addr)
 }
 
-func (p *peerTransport) DialAddressTimeout(addr memberlist.Address, timeout time.Duration) (net.Conn, error) {
+func (p *serfTransport) DialAddressTimeout(addr memberlist.Address, timeout time.Duration) (net.Conn, error) {
 	return p.DialTimeout(addr.Addr, timeout)
 }

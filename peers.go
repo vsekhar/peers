@@ -105,7 +105,7 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 		addr:         cfg.Transport.Addr(),
 	}
 
-	// Listen for membership changes and trigger update of maglevhash
+	// Listen for membership changes
 	go func() {
 		for {
 			select {
