@@ -47,15 +47,6 @@ type testPeers struct {
 }
 
 func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *testPeers {
-	//  OS
-	//   |-- reuse.Listen
-	//   |     |-- tls.Listener
-	//   |           |-- cmux
-	//   |                 |-- Match(serfNetTag) --> memberlist.Transport --> TCP traffic to serf
-	//   |                 |-- Match(userNetTag) --> peers.Accept() --> user code
-	//   |
-	//   |-- reuse.ListenPacket(same addr) --> UDP traffic to Serf
-
 	r := &testPeers{
 		peers:        make([]*peers.Peers, n),
 		rpcListeners: make([]peers.Transport, n),
@@ -63,6 +54,15 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *
 
 	// create
 	goForEach(r.peers, func(p *peers.Peers, i int) {
+		//  OS
+		//   |-- reuse.Listen
+		//   |     |-- tls.Listener
+		//   |           |-- pmux
+		//   |                 |-- peerNet --> peers.Config
+		//   |                 |-- rpcNet --> user code
+		//   |
+		//   |-- reuse.ListenPacket(same addr) --> peers.Config
+
 		rl, err := reuse.Listen("tcp", ":0")
 		if err != nil {
 			t.Fatal(err)
@@ -118,6 +118,8 @@ func TestPeers(t *testing.T) {
 			t.Errorf("peers of %v: %v", p.LocalAddr(), p.Members())
 		}
 	})
+
+	// TODO test RPC
 
 	goForEach(ps.peers, func(p *peers.Peers, _ int) {
 		p.Shutdown()

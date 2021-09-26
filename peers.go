@@ -14,9 +14,6 @@ import (
 	"github.com/vsekhar/peers/internal/singlego"
 )
 
-// TODO: Discovery providers. Discovery as a callback? Peers controls
-// frequency based on change between calls?
-
 // TODO: package peerrpc: open a general grpc server and manage a pool of
 // general grpc channels (effectively connections). User can wrap these in the
 // service stub.
@@ -150,6 +147,7 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 				select {
 				case <-time.After(interval):
 				case <-ctx.Done():
+					return
 				}
 			}
 		}()
