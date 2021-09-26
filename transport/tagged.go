@@ -116,7 +116,7 @@ func (t *taggedTransport) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	n = copy(buf[i:], p)
 	j, err := t.Interface.WriteTo(buf[:i+n], addr)
 	if err != nil {
-		return n, err
+		return j - i, err
 	}
 	if n != len(p) && j != (i+n) {
 		err = io.ErrShortWrite
