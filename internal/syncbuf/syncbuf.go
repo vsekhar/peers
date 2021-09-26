@@ -2,30 +2,24 @@ package syncbuf
 
 import (
 	"bytes"
-	"io"
 	"sync"
 )
 
 type Syncbuf struct {
 	mu      sync.Mutex
+	cond    sync.Cond // lazily initialized
 	stopped bool
 	buf     bytes.Buffer
-}
-
-func (s *Syncbuf) Read(b []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.stopped {
-		return 0, io.EOF
-	}
-	return s.buf.Read(b)
 }
 
 func (s *Syncbuf) Write(b []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.stopped {
-		return 0, io.ErrUnexpectedEOF
+	for s.stopped {
+		if s.cond.L == nil {
+			s.cond.L = &s.mu
+		}
+		s.cond.Wait()
 	}
 	return s.buf.Write(b)
 }
@@ -40,6 +34,9 @@ func (s *Syncbuf) Start() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stopped = false
+	if s.cond.L != nil {
+		s.cond.Broadcast()
+	}
 }
 
 func (s *Syncbuf) String() string {
