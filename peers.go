@@ -18,25 +18,6 @@ import (
 const maxPacketLength = 1024
 const packetBufferLength = 100
 
-const useOfClosedErrString = "use of closed network connection"
-
-// isClosed returns true if err represents a "use of closed connection" i/o
-// error.
-//
-// isClosed can be used to detect when a listen port has been closed normally
-// and a listening loop should terminate, vs. some other error.
-func isClosed(err error) bool {
-	if opErr, ok := err.(*net.OpError); ok {
-		if opErr.Err.Error() == useOfClosedErrString {
-			return true
-		}
-	}
-	if err.Error() == "server closed" {
-		return true
-	}
-	return false
-}
-
 // Config provides configuration parameters for Peers.
 type Config struct {
 	NodeName  string

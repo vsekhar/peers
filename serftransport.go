@@ -11,6 +11,25 @@ import (
 	"github.com/vsekhar/peers/transport"
 )
 
+const useOfClosedErrString = "use of closed network connection"
+
+// isClosed returns true if err represents a "use of closed connection" i/o
+// error.
+//
+// isClosed can be used to detect when a listen port has been closed normally
+// and a listening loop should terminate, vs. some other error.
+func isClosed(err error) bool {
+	if opErr, ok := err.(*net.OpError); ok {
+		if opErr.Err.Error() == useOfClosedErrString {
+			return true
+		}
+	}
+	if err.Error() == "server closed" {
+		return true
+	}
+	return false
+}
+
 var _ memberlist.NodeAwareTransport = &serfTransport{}
 
 // Implements memberlist.Transport
