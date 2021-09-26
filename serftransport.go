@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/memberlist"
+	"github.com/vsekhar/peers/transport"
 )
 
 var _ memberlist.NodeAwareTransport = &serfTransport{}
@@ -17,13 +18,13 @@ var _ memberlist.NodeAwareTransport = &serfTransport{}
 type serfTransport struct {
 	ctx       context.Context
 	cancel    func()
-	transport Transport
+	transport transport.Interface
 	sch       chan net.Conn
 	pconn     net.PacketConn
 	pch       chan *memberlist.Packet
 }
 
-func newTransport(parentCtx context.Context, t Transport, pl net.PacketConn) (*serfTransport, error) {
+func newTransport(parentCtx context.Context, t transport.Interface, pl net.PacketConn) (*serfTransport, error) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	r := &serfTransport{
 		ctx:       ctx,

@@ -4,7 +4,7 @@ import (
 	"crypto/tls"
 )
 
-func GenerateTLSConfig() *tls.Config {
+func Config() *tls.Config {
 	// From: https://golang.org/src/crypto/tls/example_test.go
 
 	certPem := []byte(`-----BEGIN CERTIFICATE-----

@@ -2,32 +2,23 @@ package peers_test
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	reuse "github.com/libp2p/go-reuseport"
 	"github.com/vsekhar/peers"
 	"github.com/vsekhar/peers/discovery/local"
-	"github.com/vsekhar/peers/internal/pmux"
-	"github.com/vsekhar/peers/internal/syncbuf"
+	"github.com/vsekhar/peers/internal/testlog"
 	"github.com/vsekhar/peers/internal/testtls"
+	"github.com/vsekhar/peers/transport"
 )
 
 const (
 	peerNetTag = "prn"
 	rpcNetTag  = "prc"
 )
-
-var tlsConfig *tls.Config
-
-func init() {
-	tlsConfig = testtls.GenerateTLSConfig()
-}
 
 func goForEach(ps []*peers.Peers, f func(p *peers.Peers, i int)) {
 	wg := sync.WaitGroup{}
@@ -43,57 +34,43 @@ func goForEach(ps []*peers.Peers, f func(p *peers.Peers, i int)) {
 
 type testPeers struct {
 	peers        []*peers.Peers
-	rpcListeners []peers.Transport
+	rpcListeners []transport.Interface
 }
 
 func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *testPeers {
 	r := &testPeers{
 		peers:        make([]*peers.Peers, n),
-		rpcListeners: make([]peers.Transport, n),
+		rpcListeners: make([]transport.Interface, n),
 	}
 
 	goForEach(r.peers, func(p *peers.Peers, i int) {
-		//  OS
-		//   |-- reuse.Listen
-		//   |     |-- tls.Listener
-		//   |           |-- pmux
-		//   |                 |-- peerNet --> peers.Config
-		//   |                 |-- rpcNet --> user code
-		//   |
-		//   |-- reuse.ListenPacket(same addr) --> peers.Config
-
-		rl, err := reuse.Listen("tcp", ":0")
+		sysTrans, udp, err := transport.SystemTCPUDP(":0")
 		if err != nil {
 			t.Fatal(err)
 		}
 		go func() {
 			<-ctx.Done()
-			if err := rl.Close(); err != nil && logger != nil {
+			if err := sysTrans.Close(); err != nil && logger != nil {
 				logger.Printf("error closing listener %v", err)
 			}
 		}()
-		tcfg := tlsConfig.Clone()
+		tcfg := testtls.Config()
 		tcfg.ServerName = fmt.Sprintf("peer%d", i)
-		tl := tls.NewListener(rl, tcfg)
-		td := &tls.Dialer{Config: tcfg}
-		pm := pmux.New(tl, td, logger, peerNetTag, rpcNetTag)
-		pl, err := reuse.ListenPacket("udp", rl.Addr().String())
-		if err != nil {
-			t.Fatal(err)
-		}
-		discoverer, err := local.New(ctx, rl.Addr().String(), logger)
+		tlsTrans := transport.TLS(sysTrans, tcfg)
+		tagged := transport.Tagged(tlsTrans, logger, peerNetTag, rpcNetTag)
+		discoverer, err := local.New(ctx, sysTrans.Addr().String(), logger)
 		if err != nil {
 			t.Fatal(err)
 		}
 		cfg := peers.Config{
 			NodeName:   tcfg.ServerName,
-			Transport:  pm[peerNetTag],
-			PacketConn: pl,
+			Transport:  tagged[peerNetTag],
+			PacketConn: udp,
 			Logger:     logger,
 			Discoverer: discoverer,
 		}
 		r.peers[i], err = peers.New(ctx, cfg)
-		r.rpcListeners[i] = pm[rpcNetTag]
+		r.rpcListeners[i] = tagged[rpcNetTag]
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -105,9 +82,8 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *
 func TestPeers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	const numPeers = 5
-	lbuf := new(syncbuf.Syncbuf)
-	logger := log.New(lbuf, "", log.LstdFlags|log.Lshortfile)
-	ps := makeCluster(ctx, t, numPeers, logger)
+	logger := testlog.New()
+	ps := makeCluster(ctx, t, numPeers, logger.Std())
 
 	time.Sleep(500 * time.Millisecond) // let peers gossip
 
@@ -126,12 +102,6 @@ func TestPeers(t *testing.T) {
 	cancel()
 
 	// TODO: fix flakiness with list of errors that don't matter, ignore them
-	lbuf.Close()
-	logs := lbuf.String()
-	if len(logs) == 0 {
-		t.Error("no logs")
-	}
-	if strings.Contains(logs, "ERR") || strings.Contains(logs, "ERROR") {
-		t.Error(logs)
-	}
+	logger.ErrorIfEmpty(t)
+	logger.ErrorIfContains(t, "ERR", "ERROR")
 }

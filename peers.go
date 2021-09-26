@@ -12,12 +12,8 @@ import (
 	"github.com/hashicorp/serf/serf"
 	"github.com/vsekhar/peers/discovery"
 	"github.com/vsekhar/peers/internal/singlego"
+	"github.com/vsekhar/peers/transport"
 )
-
-type Transport interface {
-	net.Listener
-	DialContext(ctx context.Context, network, address string) (net.Conn, error)
-}
 
 const maxPacketLength = 1024
 const packetBufferLength = 100
@@ -44,7 +40,7 @@ func isClosed(err error) bool {
 // Config provides configuration parameters for Peers.
 type Config struct {
 	NodeName   string
-	Transport  Transport
+	Transport  transport.Interface
 	PacketConn net.PacketConn
 	Logger     *log.Logger
 

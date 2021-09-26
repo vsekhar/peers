@@ -17,12 +17,12 @@ func BenchmarkTLS(b *testing.B) {
 	// cpu: Intel(R) Xeon(R) W-2135 CPU @ 3.70GHz
 	// BenchmarkTLS-12    	    3369	    330798 ns/op	   12701 B/op	     353 allocs/op
 	for i := 0; i < b.N; i++ {
-		_ = testtls.GenerateTLSConfig()
+		_ = testtls.Config()
 	}
 }
 
 func TestTestTLS(t *testing.T) {
-	tcfg := testtls.GenerateTLSConfig()
+	tcfg := testtls.Config()
 	l, err := tls.Listen("tcp", ":0", tcfg)
 	if err != nil {
 		t.Fatal(err)
