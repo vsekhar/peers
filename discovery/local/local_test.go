@@ -22,12 +22,14 @@ func within(i, target, within int) bool {
 }
 
 func TestLocal(t *testing.T) {
+	numDiscoverers := 10
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	lbuf := &syncbuf.Syncbuf{}
 	logger := log.New(lbuf, "", log.LstdFlags|log.Lshortfile)
 
-	ds := make([]discovery.Interface, 4)
+	ds := make([]discovery.Interface, numDiscoverers)
 	for i := range ds {
 		var err error
 		ds[i], err = New(ctx, fmt.Sprintf("test%d", i), logger)
@@ -37,7 +39,7 @@ func TestLocal(t *testing.T) {
 		ds[i].Discover()
 	}
 	peers := ds[0].Discover()
-	if !within(len(peers), 3, 1) {
+	if !within(len(peers), numDiscoverers-1, 1) {
 		// Some flakiness
 		t.Errorf("expected %d peers, got %d", 3, len(peers))
 	}
