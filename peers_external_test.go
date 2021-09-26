@@ -12,6 +12,7 @@ import (
 
 	reuse "github.com/libp2p/go-reuseport"
 	"github.com/vsekhar/peers"
+	"github.com/vsekhar/peers/discovery/local"
 	"github.com/vsekhar/peers/internal/pmux"
 	"github.com/vsekhar/peers/internal/syncbuf"
 	"github.com/vsekhar/peers/internal/testtls"
@@ -81,29 +82,22 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *
 		if err != nil {
 			t.Fatal(err)
 		}
+		discoverer, err := local.New(ctx, rl.Addr().String(), logger)
+		if err != nil {
+			t.Fatal(err)
+		}
 		cfg := peers.Config{
 			NodeName:   tcfg.ServerName,
 			Transport:  pm[peerNetTag],
 			PacketConn: pl,
 			Logger:     logger,
+			Discoverer: discoverer,
 		}
 		r.peers[i], err = peers.New(ctx, cfg)
 		r.rpcListeners[i] = pm[rpcNetTag]
 		if err != nil {
 			t.Fatal(err)
 		}
-	})
-
-	// connect
-	goForEach(r.peers, func(p *peers.Peers, i int) {
-		n, err := p.Join([]string{r.peers[(i+1)%len(r.peers)].LocalAddr()})
-		if err != nil {
-			t.Error(err)
-		}
-		if n != 1 {
-			t.Error("failed to join")
-		}
-
 	})
 
 	return r

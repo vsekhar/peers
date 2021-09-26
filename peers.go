@@ -6,11 +6,16 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"time"
 
 	"github.com/hashicorp/memberlist"
 	"github.com/hashicorp/serf/serf"
+	"github.com/vsekhar/peers/discovery"
 	"github.com/vsekhar/peers/internal/singlego"
 )
+
+// TODO: Discovery providers. Discovery as a callback? Peers controls
+// frequency based on change between calls?
 
 // TODO: package peerrpc: open a general grpc server and manage a pool of
 // general grpc channels (effectively connections). User can wrap these in the
@@ -59,6 +64,11 @@ type Config struct {
 	// MemberNotify will typically call Members to get the current list of
 	// members.
 	MemberNotify func()
+
+	// Discoverer.Discover is called periodically to obtain provide out-of-band
+	// member discovery. This is useful for connecting new instances to a group
+	// of peers.
+	Discoverer discovery.Interface
 }
 
 // Peers is the primary object of a peer.
@@ -105,6 +115,46 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 		addr:         cfg.Transport.Addr(),
 	}
 
+	// Discover members
+	if cfg.Discoverer != nil {
+		go func() {
+			cache := make(map[string]struct{})
+			runsWithoutNew := 0
+			for {
+				start := time.Now()
+				mems := cfg.Discoverer.Discover()
+				var newMems []string
+				newCache := make(map[string]struct{}, len(cache))
+				for _, m := range mems {
+					if _, ok := cache[m]; !ok {
+						newMems = append(newMems, m)
+					}
+					newCache[m] = struct{}{}
+				}
+				cache = newCache
+
+				if len(newMems) > 0 {
+					_, err := srf.Join(newMems, true)
+					if err != nil && cfg.Logger != nil {
+						cfg.Logger.Printf("peers: join error: %v", err)
+					}
+					runsWithoutNew = 0
+				} else {
+					runsWithoutNew++
+					if runsWithoutNew > 5 {
+						runsWithoutNew = 5
+					}
+				}
+
+				interval := (1<<runsWithoutNew)*time.Second - time.Since(start)
+				select {
+				case <-time.After(interval):
+				case <-ctx.Done():
+				}
+			}
+		}()
+	}
+
 	// Listen for membership changes
 	go func() {
 		for {
@@ -128,13 +178,6 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 
 func (p *Peers) LocalAddr() string {
 	return p.addr.String()
-}
-
-func (p *Peers) Join(nodes []string) (int, error) {
-	// Everything is eventually consistent, so we can't guarantee that messages
-	// will be delivered. Therefore don't bother trying to deliver old messages,
-	// (the second argument below is ignoreOld).
-	return p.serf.Join(nodes, true)
 }
 
 func (p *Peers) NumPeers() int {
