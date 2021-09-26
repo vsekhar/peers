@@ -17,5 +17,5 @@ type ContextDialer interface {
 type Interface interface {
 	net.Listener
 	ContextDialer
-	// TODO: add net.PacketConn
+	net.PacketConn
 }

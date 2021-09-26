@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
@@ -11,9 +12,11 @@ import (
 	"strings"
 
 	"github.com/soheilhy/cmux"
+	"github.com/vsekhar/peers/internal/last"
 )
 
 const tagAck = "pok"
+const packetBufferSize = 1024
 
 func matchTag(tag string) func(r io.Reader) bool {
 	return func(r io.Reader) bool {
@@ -28,20 +31,28 @@ func matchTag(tag string) func(r io.Reader) bool {
 
 var ackMatcher = matchTag(tagAck)
 
+type packet struct {
+	payload []byte
+	addr    net.Addr
+}
 type taggedTransport struct {
-	ctx     context.Context
-	cancel  func()
-	l       net.Listener
-	d       ContextDialer
-	tag     string
-	matcher func(r io.Reader) bool
+	Interface
+	ctx          context.Context
+	cancel       func()
+	muxListener  net.Listener
+	tag          string
+	matcher      func(r io.Reader) bool
+	latestPacket *last.Buffer // *packet
 }
 
-func (t *taggedTransport) Addr() net.Addr { return t.l.Addr() }
 func (t *taggedTransport) Close() error {
-	err := t.l.Close()
+	e1 := t.muxListener.Close()
 	t.cancel()
-	return err
+	e2 := t.Interface.Close()
+	if e1 != nil || e2 != nil {
+		return fmt.Errorf("tagged: mux %w, transport %v", e1, e2)
+	}
+	return nil
 }
 
 func (t *taggedTransport) Dial(network, address string) (net.Conn, error) {
@@ -49,7 +60,7 @@ func (t *taggedTransport) Dial(network, address string) (net.Conn, error) {
 }
 
 func (t *taggedTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	c, err := t.d.DialContext(ctx, network, address)
+	c, err := t.Interface.DialContext(ctx, network, address)
 	if err != nil {
 		return c, err
 	}
@@ -71,7 +82,7 @@ func (t *taggedTransport) DialContext(ctx context.Context, network, address stri
 }
 
 func (t *taggedTransport) Accept() (net.Conn, error) {
-	c, err := t.l.Accept()
+	c, err := t.muxListener.Accept()
 	if err != nil {
 		return c, err
 	}
@@ -91,19 +102,42 @@ func (t *taggedTransport) Accept() (net.Conn, error) {
 	return c, nil
 }
 
+func (t *taggedTransport) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	packet := t.latestPacket.LoadOrWait().(*packet)
+	n = copy(p, packet.payload)
+	return n, packet.addr, nil
+}
+
+func (t *taggedTransport) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+	var ar [packetBufferSize]byte
+	buf := ar[:]
+	i := binary.PutUvarint(buf, uint64(len([]byte(t.tag))))
+	i += copy(buf[i:], []byte(t.tag))
+	n = copy(buf[i:], p)
+	j, err := t.Interface.WriteTo(buf[:i+n], addr)
+	if err != nil {
+		return n, err
+	}
+	if n != len(p) && j != (i+n) {
+		err = io.ErrShortWrite
+	}
+	return n, err
+}
+
 func Tagged(transport Interface, logger *log.Logger, tags ...string) map[string]Interface {
-	r := make(map[string]Interface, len(tags))
+	r := make(map[string]*taggedTransport, len(tags))
 	mux := cmux.New(transport)
 	for _, t := range tags {
 		ctx, cancel := context.WithCancel(context.Background())
 		matcher := matchTag(t)
 		r[t] = &taggedTransport{
-			ctx:     ctx,
-			cancel:  cancel,
-			d:       transport,
-			l:       mux.Match(matcher),
-			tag:     t,
-			matcher: matcher,
+			Interface:    transport,
+			ctx:          ctx,
+			cancel:       cancel,
+			muxListener:  mux.Match(matcher),
+			tag:          t,
+			matcher:      matcher,
+			latestPacket: last.NewBuffer(),
 		}
 	}
 	mux.HandleError(func(err error) bool {
@@ -122,5 +156,27 @@ func Tagged(transport Interface, logger *log.Logger, tags ...string) map[string]
 			}
 		}
 	}()
-	return r
+	go func() {
+		buf := make([]byte, packetBufferSize)
+		for {
+			totalLength, addr, err := transport.ReadFrom(buf)
+			if err != nil && logger != nil {
+				logger.Printf("peers: packet read: %v", err)
+				continue
+			}
+			s, n := binary.Uvarint(buf)
+			if n <= 0 && logger != nil {
+				logger.Printf("peers: bad tag size")
+				continue
+			}
+			if t, ok := r[string(buf[n:n+int(s)])]; ok {
+				t.latestPacket.Store(&packet{payload: buf[n+int(s) : totalLength], addr: addr})
+			}
+		}
+	}()
+	ifaces := make(map[string]Interface)
+	for t, ts := range r {
+		ifaces[t] = ts
+	}
+	return ifaces
 }

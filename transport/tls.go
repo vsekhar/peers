@@ -7,19 +7,16 @@ import (
 )
 
 type tlsTransport struct {
-	t      Interface
+	Interface
 	config *tls.Config
 }
-
-func (t *tlsTransport) Addr() net.Addr { return t.t.Addr() }
-func (t *tlsTransport) Close() error   { return t.t.Close() }
 
 func (t *tlsTransport) Dial(network, address string) (net.Conn, error) {
 	return t.DialContext(context.Background(), network, address)
 }
 
 func (t *tlsTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	c, err := t.t.DialContext(ctx, network, address)
+	c, err := t.Interface.DialContext(ctx, network, address)
 	if err != nil {
 		return c, err
 	}
@@ -28,7 +25,7 @@ func (t *tlsTransport) DialContext(ctx context.Context, network, address string)
 }
 
 func (t *tlsTransport) Accept() (net.Conn, error) {
-	c, err := t.t.Accept()
+	c, err := t.Interface.Accept()
 	if err != nil {
 		return c, err
 	}
@@ -36,9 +33,11 @@ func (t *tlsTransport) Accept() (net.Conn, error) {
 	return tc, nil
 }
 
-func TLS(transport Interface, config *tls.Config) Interface {
+// TODO: override PacketConn methods to implement symmetric encryption?
+
+func TLSWithInsecureUDP(transport Interface, config *tls.Config) Interface {
 	return &tlsTransport{
-		t:      transport,
-		config: config,
+		Interface: transport,
+		config:    config,
 	}
 }

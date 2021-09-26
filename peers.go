@@ -39,10 +39,9 @@ func isClosed(err error) bool {
 
 // Config provides configuration parameters for Peers.
 type Config struct {
-	NodeName   string
-	Transport  transport.Interface
-	PacketConn net.PacketConn
-	Logger     *log.Logger
+	NodeName  string
+	Transport transport.Interface
+	Logger    *log.Logger
 
 	// MemberNotify is called from its own goroutine when membership changes
 	// occur. Only one call of MemberNotify will be active at a time, so a
@@ -77,7 +76,7 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 	scfg.Logger = cfg.Logger
 	scfg.MemberlistConfig = memberlist.DefaultLANConfig()
 	var err error
-	scfg.MemberlistConfig.Transport, err = newTransport(ctx, cfg.Transport, cfg.PacketConn)
+	scfg.MemberlistConfig.Transport, err = newSerfTransport(ctx, cfg.Transport)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -107,7 +106,15 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 		go func() {
 			cache := make(map[string]struct{})
 			runsWithoutNew := 0
+			interval := time.Duration(0)
 			for {
+				select {
+				case <-time.After(interval):
+				case <-srf.ShutdownCh():
+					return
+				case <-ctx.Done():
+					return
+				}
 				start := time.Now()
 				mems := cfg.Discoverer.Discover()
 				var newMems []string
@@ -121,6 +128,9 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 				cache = newCache
 
 				if len(newMems) > 0 {
+					if srf.State() != serf.SerfAlive {
+						return
+					}
 					_, err := srf.Join(newMems, true)
 					if err != nil && cfg.Logger != nil {
 						cfg.Logger.Printf("peers: join error: %v", err)
@@ -133,14 +143,9 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 					}
 				}
 
-				interval := (1<<runsWithoutNew)*time.Second - time.Since(start)
+				interval = (1<<runsWithoutNew)*time.Second - time.Since(start)
 				if p.NumPeers() == 0 {
 					interval = 1 * time.Second
-				}
-				select {
-				case <-time.After(interval):
-				case <-ctx.Done():
-					return
 				}
 			}
 		}()

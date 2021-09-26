@@ -44,7 +44,7 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *
 	}
 
 	goForEach(r.peers, func(p *peers.Peers, i int) {
-		sysTrans, udp, err := transport.SystemTCPUDP(":0")
+		sysTrans, err := transport.System(":0")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -56,7 +56,7 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *
 		}()
 		tcfg := testtls.Config()
 		tcfg.ServerName = fmt.Sprintf("peer%d", i)
-		tlsTrans := transport.TLS(sysTrans, tcfg)
+		tlsTrans := transport.TLSWithInsecureUDP(sysTrans, tcfg)
 		tagged := transport.Tagged(tlsTrans, logger, peerNetTag, rpcNetTag)
 		discoverer, err := local.New(ctx, sysTrans.Addr().String(), logger)
 		if err != nil {
@@ -65,7 +65,6 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *
 		cfg := peers.Config{
 			NodeName:   tcfg.ServerName,
 			Transport:  tagged[peerNetTag],
-			PacketConn: udp,
 			Logger:     logger,
 			Discoverer: discoverer,
 		}
@@ -96,12 +95,25 @@ func TestPeers(t *testing.T) {
 
 	// TODO test RPC
 
+	logger.ErrorIfEmpty(t)
+	logger.ErrorIfContains(t,
+		"ERR",
+		"ERROR",
+		"error",
+		"WARN")
+
 	goForEach(ps.peers, func(p *peers.Peers, _ int) {
 		p.Shutdown()
 	})
 	cancel()
 
-	// TODO: fix flakiness with list of errors that don't matter, ignore them
+	// Still flaky, data corruption errors around the time of leaving
 	logger.ErrorIfEmpty(t)
-	logger.ErrorIfContains(t, "ERR", "ERROR")
+	logger.ErrorIfContains(t,
+		"ERR",
+		"ERROR",
+		"error")
+	// There's usually at least one invalid UDP packet, probably due to MTU
+	// discovery.
+	logger.ErrorIfContainsMoreThan(t, "[WARN] memberlist: Got invalid checksum for UDP packet", 1)
 }

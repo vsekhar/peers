@@ -9,7 +9,7 @@ import (
 )
 
 type Logger struct {
-	*log.Logger
+	l   *log.Logger
 	buf *syncbuf.Syncbuf
 }
 
@@ -17,17 +17,18 @@ func New() *Logger {
 	buf := &syncbuf.Syncbuf{}
 	l := log.New(buf, "", log.LstdFlags|log.Lshortfile)
 	return &Logger{
-		Logger: l,
-		buf:    buf,
+		l:   l,
+		buf: buf,
 	}
 }
 
 func (l *Logger) Std() *log.Logger {
-	return l.Logger
+	return l.l
 }
 
 func (l *Logger) ErrorIfEmpty(t *testing.T) {
-	l.buf.Close()
+	l.buf.Stop()
+	defer l.buf.Start()
 	logs := l.buf.String()
 	if len(logs) == 0 {
 		t.Error("no logs")
@@ -35,7 +36,8 @@ func (l *Logger) ErrorIfEmpty(t *testing.T) {
 }
 
 func (l *Logger) ErrorIfNotEmpty(t *testing.T) {
-	l.buf.Close()
+	l.buf.Stop()
+	defer l.buf.Start()
 	logs := l.buf.String()
 	if len(logs) > 0 {
 		t.Error(logs)
@@ -43,7 +45,8 @@ func (l *Logger) ErrorIfNotEmpty(t *testing.T) {
 }
 
 func (l *Logger) ErrorIfContains(t *testing.T, substr ...string) {
-	l.buf.Close()
+	l.buf.Stop()
+	defer l.buf.Start()
 	logs := l.buf.String()
 	for _, s := range substr {
 		if strings.Contains(logs, s) {
@@ -51,4 +54,19 @@ func (l *Logger) ErrorIfContains(t *testing.T, substr ...string) {
 			return
 		}
 	}
+}
+
+func (l *Logger) ErrorIfContainsMoreThan(t *testing.T, substr string, n int) {
+	l.buf.Stop()
+	defer l.buf.Start()
+	logs := l.buf.String()
+	if strings.Count(logs, substr) > n {
+		t.Error(logs)
+	}
+}
+
+func (l *Logger) Flush() string {
+	l.buf.Stop()
+	defer l.buf.Start()
+	return l.buf.String()
 }

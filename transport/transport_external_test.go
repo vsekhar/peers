@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -16,7 +15,7 @@ import (
 
 const payload = "testpayload"
 
-func exchangePayloads(t *testing.T, trans transport.Interface) {
+func exchangeTCP(t *testing.T, trans transport.Interface) {
 	wg := new(sync.WaitGroup)
 	wg.Add(2)
 	go func() {
@@ -60,7 +59,7 @@ func exchangePayloads(t *testing.T, trans transport.Interface) {
 
 }
 
-func exchangeUDP(t *testing.T, udp net.PacketConn) {
+func exchangeUDP(t *testing.T, udp transport.Interface) {
 	wg := new(sync.WaitGroup)
 	wg.Add(2)
 	go func() {
@@ -101,44 +100,37 @@ func check(t *testing.T, f func() error) {
 }
 
 func TestSystem(t *testing.T) {
-	s, err := transport.System("tcp", ":0")
+	s, err := transport.System(":0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer check(t, s.Close)
-	exchangePayloads(t, s)
-}
-
-func TestSystemTCPUDP(t *testing.T) {
-	s, udp, err := transport.SystemTCPUDP(":0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer check(t, s.Close)
-	exchangePayloads(t, s)
-	exchangeUDP(t, udp)
+	exchangeTCP(t, s)
+	exchangeUDP(t, s)
 }
 
 func TestTLS(t *testing.T) {
-	s, err := transport.System("tcp", ":0")
+	s, err := transport.System(":0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer check(t, s.Close)
-	tlsTrans := transport.TLS(s, testtls.Config())
-	exchangePayloads(t, tlsTrans)
+	tlsTrans := transport.TLSWithInsecureUDP(s, testtls.Config())
+	exchangeTCP(t, tlsTrans)
+	exchangeUDP(t, tlsTrans)
 }
 
 func TestTagged(t *testing.T) {
-	sysTrans, err := transport.System("tcp", ":0")
+	sysTrans, err := transport.System(":0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer check(t, sysTrans.Close)
-	tlsTrans := transport.TLS(sysTrans, testtls.Config())
+	tlsTrans := transport.TLSWithInsecureUDP(sysTrans, testtls.Config())
 	defer check(t, tlsTrans.Close)
 	logger := testlog.New()
 	taggedTrans := transport.Tagged(tlsTrans, logger.Std(), "test1", "test2")
-	exchangePayloads(t, taggedTrans["test1"])
+	exchangeTCP(t, taggedTrans["test1"])
+	exchangeUDP(t, taggedTrans["test2"])
 	logger.ErrorIfNotEmpty(t)
 }

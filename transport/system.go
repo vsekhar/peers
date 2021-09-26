@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"fmt"
 	"net"
 
 	reuse "github.com/libp2p/go-reuseport"
@@ -9,33 +10,36 @@ import (
 type sysTransport struct {
 	net.Listener
 	*net.Dialer
+	net.PacketConn
 }
 
-func System(network, address string) (Interface, error) {
-	l, err := net.Listen(network, address)
-	if err != nil {
-		return nil, err
+func (s *sysTransport) Close() error {
+	e1 := s.Listener.Close()
+	e2 := s.PacketConn.Close()
+	if e1 != nil || e2 != nil {
+		return fmt.Errorf("transport: tcp %w, udp %v", e1, e2)
 	}
-	return &sysTransport{
-		Listener: l,
-		Dialer:   new(net.Dialer),
-	}, nil
+	return nil
 }
 
-func SystemTCPUDP(address string) (Interface, net.PacketConn, error) {
-	// TODO: after implementing UDP muxing, SystemTCPUDP will become System.
+func (s *sysTransport) LocalAddr() net.Addr {
+	// TODO: why is this needed? Embedded PacketConn provides LocalAddr...
+	return s.PacketConn.LocalAddr()
+}
 
+func System(address string) (Interface, error) {
 	tcp, err := reuse.Listen("tcp", address)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	udp, err := reuse.ListenPacket("udp", tcp.Addr().String())
 	if err != nil {
 		tcp.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	return &sysTransport{
-		Listener: tcp,
-		Dialer:   new(net.Dialer),
-	}, udp, nil
+		Listener:   tcp,
+		Dialer:     new(net.Dialer),
+		PacketConn: udp,
+	}, nil
 }

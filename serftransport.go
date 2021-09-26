@@ -2,7 +2,6 @@ package peers
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -20,23 +19,17 @@ type serfTransport struct {
 	cancel    func()
 	transport transport.Interface
 	sch       chan net.Conn
-	pconn     net.PacketConn
 	pch       chan *memberlist.Packet
 }
 
-func newTransport(parentCtx context.Context, t transport.Interface, pl net.PacketConn) (*serfTransport, error) {
+func newSerfTransport(parentCtx context.Context, t transport.Interface) (*serfTransport, error) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	r := &serfTransport{
 		ctx:       ctx,
 		cancel:    cancel,
 		transport: t,
 		sch:       make(chan net.Conn),
-		pconn:     pl,
 		pch:       make(chan *memberlist.Packet, packetBufferLength),
-	}
-
-	if t.Addr().String() != pl.LocalAddr().String() {
-		return nil, fmt.Errorf("address mismatch: %s and %s", t.Addr().String(), pl.LocalAddr().String())
 	}
 
 	// Listen for and push new streams
@@ -70,7 +63,7 @@ func newTransport(parentCtx context.Context, t transport.Interface, pl net.Packe
 	go func() {
 		for {
 			buf := make([]byte, maxPacketLength)
-			n, addr, err := r.pconn.ReadFrom(buf)
+			n, addr, err := r.transport.ReadFrom(buf)
 			now := time.Now()
 			if err != nil {
 				if isClosed(err) {
@@ -98,7 +91,7 @@ func newTransport(parentCtx context.Context, t transport.Interface, pl net.Packe
 // might be empty) and returns the desired IP and port to advertise to
 // the rest of the cluster.
 func (p *serfTransport) FinalAdvertiseAddr(_ string, _ int) (net.IP, int, error) {
-	a := p.pconn.LocalAddr()
+	a := p.transport.LocalAddr()
 	addr, portStr, err := net.SplitHostPort(a.String())
 	if err != nil {
 		return nil, 0, err
@@ -127,7 +120,7 @@ func (p *serfTransport) WriteTo(b []byte, addr string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	n, err := p.pconn.WriteTo(b, uaddr)
+	n, err := p.transport.WriteTo(b, uaddr)
 	now := time.Now()
 	if err != nil {
 		return now, err

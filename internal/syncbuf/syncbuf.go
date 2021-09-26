@@ -7,15 +7,15 @@ import (
 )
 
 type Syncbuf struct {
-	mu     sync.Mutex
-	closed bool
-	buf    bytes.Buffer
+	mu      sync.Mutex
+	stopped bool
+	buf     bytes.Buffer
 }
 
 func (s *Syncbuf) Read(b []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.stopped {
 		return 0, io.EOF
 	}
 	return s.buf.Read(b)
@@ -24,17 +24,22 @@ func (s *Syncbuf) Read(b []byte) (int, error) {
 func (s *Syncbuf) Write(b []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.stopped {
 		return 0, io.ErrUnexpectedEOF
 	}
 	return s.buf.Write(b)
 }
 
-func (s *Syncbuf) Close() error {
+func (s *Syncbuf) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.closed = true
-	return nil
+	s.stopped = true
+}
+
+func (s *Syncbuf) Start() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopped = false
 }
 
 func (s *Syncbuf) String() string {
