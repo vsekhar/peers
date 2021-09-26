@@ -52,7 +52,6 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *
 		rpcListeners: make([]peers.Transport, n),
 	}
 
-	// create
 	goForEach(r.peers, func(p *peers.Peers, i int) {
 		//  OS
 		//   |-- reuse.Listen

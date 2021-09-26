@@ -138,6 +138,9 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 				}
 
 				interval := (1<<runsWithoutNew)*time.Second - time.Since(start)
+				if p.NumPeers() == 0 {
+					interval = 1 * time.Second
+				}
 				select {
 				case <-time.After(interval):
 				case <-ctx.Done():
