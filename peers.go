@@ -14,12 +14,6 @@ import (
 	"github.com/vsekhar/peers/internal/singlego"
 )
 
-// TODO: package peerrpc: open a general grpc server and manage a pool of
-// general grpc channels (effectively connections). User can wrap these in the
-// service stub.
-//   Dial: use dial options WithContextDialer and WithInsecure (TLS below)
-//   Server: start on a listener and register service
-
 type Transport interface {
 	net.Listener
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
@@ -47,7 +41,7 @@ func isClosed(err error) bool {
 	return false
 }
 
-// Config provides configuration parameters for a Host.
+// Config provides configuration parameters for Peers.
 type Config struct {
 	NodeName   string
 	Transport  Transport
@@ -62,9 +56,9 @@ type Config struct {
 	// members.
 	MemberNotify func()
 
-	// Discoverer.Discover is called periodically to obtain provide out-of-band
-	// member discovery. This is useful for connecting new instances to a group
-	// of peers.
+	// Discoverer.Discover is called periodically to obtain out-of-band member
+	// discovery. This is useful for connecting new instances to a group of
+	// peers.
 	Discoverer discovery.Interface
 }
 
@@ -198,5 +192,6 @@ func (p *Peers) Shutdown() error {
 		return err
 	}
 	p.cancel()
+	p.memberNotify.Close()
 	return nil
 }

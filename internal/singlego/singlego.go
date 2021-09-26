@@ -15,7 +15,10 @@ func New(ctx context.Context, f func()) Trigger {
 	go func() {
 		for {
 			select {
-			case <-r:
+			case _, ok := <-r:
+				if !ok {
+					return
+				}
 				if f != nil {
 					f()
 				}
@@ -32,4 +35,9 @@ func (t Trigger) Notify() {
 	case t <- struct{}{}:
 	default:
 	}
+}
+
+func (t Trigger) Close() error {
+	close(t)
+	return nil
 }
