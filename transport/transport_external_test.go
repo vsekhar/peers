@@ -135,18 +135,3 @@ func TestTLSInsecureUDP(t *testing.T) {
 	exchangeTCP(t, tlsTrans)
 	exchangeUDP(t, tlsTrans)
 }
-
-func TestTLS(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	s, err := transport.System(":0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer check(t, s.Close)
-	logger := testlog.New()
-	tlsTrans := transport.TLS(ctx, s, testtls.Config(), logger.Std())
-	exchangeTCP(t, tlsTrans)
-	exchangeUDP(t, tlsTrans)
-	logger.ErrorIfNotEmpty(t)
-}
