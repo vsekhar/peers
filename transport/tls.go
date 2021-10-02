@@ -98,12 +98,17 @@ func (t *tlsTransport) storeKey(address string, id keyID, k []byte) {
 	t.keys.Add(string(id[:]), e)
 }
 
-func (t *tlsTransport) sendKey(ctx context.Context, address string) error {
+func (t *tlsTransport) sendKey(ctx context.Context, address string) (err error) {
 	c, err := t.keyTransport.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() {
+		e := c.Close()
+		if e != nil && err == nil {
+			err = e
+		}
+	}()
 
 	// Send key ID, which will identify the key to use for subsequent packets
 	// sent to this remote host.
@@ -153,14 +158,16 @@ func (t *tlsTransport) sendKey(ctx context.Context, address string) error {
 	// remote host.
 	t.storeKey(address, id, k)
 
-	if err := c.Close(); err != nil {
-		return err
-	}
 	return nil
 }
 
-func (t *tlsTransport) receiveKey(c net.Conn) error {
-	defer c.Close()
+func (t *tlsTransport) receiveKey(c net.Conn) (err error) {
+	defer func() {
+		e := c.Close()
+		if e != nil && err == nil {
+			err = e
+		}
+	}()
 
 	// Receive key ID
 	var id keyID
