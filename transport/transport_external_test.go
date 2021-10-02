@@ -109,17 +109,6 @@ func TestSystem(t *testing.T) {
 	exchangeUDP(t, s)
 }
 
-func TestTLS(t *testing.T) {
-	s, err := transport.System(":0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer check(t, s.Close)
-	tlsTrans := transport.TLSWithInsecureUDP(s, testtls.Config())
-	exchangeTCP(t, tlsTrans)
-	exchangeUDP(t, tlsTrans)
-}
-
 func TestTagged(t *testing.T) {
 	sysTrans, err := transport.System(":0")
 	if err != nil {
@@ -131,6 +120,33 @@ func TestTagged(t *testing.T) {
 	logger := testlog.New()
 	taggedTrans := transport.Tagged(tlsTrans, logger.Std(), "test1", "test2")
 	exchangeTCP(t, taggedTrans["test1"])
+	exchangeUDP(t, taggedTrans["test1"])
 	exchangeUDP(t, taggedTrans["test2"])
+	logger.ErrorIfNotEmpty(t)
+}
+
+func TestTLSInsecureUDP(t *testing.T) {
+	s, err := transport.System(":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check(t, s.Close)
+	tlsTrans := transport.TLSWithInsecureUDP(s, testtls.Config())
+	exchangeTCP(t, tlsTrans)
+	exchangeUDP(t, tlsTrans)
+}
+
+func TestTLS(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := transport.System(":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check(t, s.Close)
+	logger := testlog.New()
+	tlsTrans := transport.TLS(ctx, s, testtls.Config(), logger.Std())
+	exchangeTCP(t, tlsTrans)
+	exchangeUDP(t, tlsTrans)
 	logger.ErrorIfNotEmpty(t)
 }
