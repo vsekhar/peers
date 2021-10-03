@@ -5,7 +5,6 @@
 package maglevhash
 
 import (
-	"bytes"
 	"crypto/sha1"
 	"fmt"
 	"math"
@@ -13,14 +12,16 @@ import (
 	"sort"
 
 	"github.com/segmentio/fasthash/fnv1a"
+	"github.com/vsekhar/peers/dispatch"
+)
+
+const (
+	memberTableFactor = 100
+	coarsePrimeSafety = 5
+	finePrimeSafety   = 1000
 )
 
 func nextPrime(n int) int {
-	const (
-		coarsePrimeSafety = 5
-		finePrimeSafety   = 1000
-	)
-
 	i := big.NewInt(int64(n))
 	one := big.NewInt(1)
 	for {
@@ -33,46 +34,12 @@ func nextPrime(n int) int {
 	}
 }
 
+var _ dispatch.Dispatcher = (*MaglevHasher)(nil)
+
 type MaglevHasher struct {
-	replicas int
-	members  []string
-	table    [][]string // table[entryNo][replicaNo]
-	binSize  uint64
-}
-
-func fill(key string, names []string, table [][]string, replicas int) {
-	if replicas < 1 {
-		panic("replicas must be zero or greater")
-	}
-
-	N := len(names)
-	M := len(table)
-	offsets := make([]int, N)
-	skips := make([]int, N)
-	nextIdxs := make([]int, N)
-	for i, m := range names {
-		v1 := fnv1a.HashString32(key + m)
-		h2 := sha1.Sum([]byte(key + m))
-		v2 := fnv1a.HashBytes32(h2[:])
-		offsets[i] = int(v1) % M
-		skips[i] = (int(v2) % (M - 1)) + 1
-	}
-	done := 0
-	// fillLoop:
-	for done < len(table) {
-		for i, name := range names {
-			// next preference for member i
-			p := (offsets[i] + nextIdxs[i]*skips[i]) % M
-			nextIdxs[i]++
-
-			if len(table[p]) < replicas {
-				table[p] = append(table[p], name)
-				if len(table[p]) == replicas {
-					done++
-				}
-			}
-		}
-	}
+	members int
+	table   [][]string // table[entryNo][replicaNo] --> memberName
+	binSize uint64
 }
 
 // New creates a new MaglevHasher consisting of members.
@@ -90,96 +57,50 @@ func New(members []string, replicas int) (*MaglevHasher, error) {
 	}
 
 	N := len(sorted)
-	M := nextPrime(N * 100)
+	M := nextPrime(N * memberTableFactor)
 
 	r := &MaglevHasher{
-		replicas: replicas,
-		members:  sorted,
-		binSize:  math.MaxUint64 / uint64(M),
-		table:    make([][]string, M),
+		members: len(sorted),
+		binSize: math.MaxUint64 / uint64(M),
+		table:   make([][]string, M),
 	}
 	for i := range r.table {
 		r.table[i] = make([]string, 0, replicas) // preallocate
 	}
-	if len(members) > 0 {
-		fill("", sorted, r.table, replicas)
+	if len(members) == 0 {
+		return r, nil
+	}
+
+	offsets := make([]int, N)
+	skips := make([]int, N)
+	nextIdxs := make([]int, N)
+	for i, m := range sorted {
+		v1 := fnv1a.HashString32(m)
+		h2 := sha1.Sum([]byte(m))
+		v2 := fnv1a.HashBytes32(h2[:])
+		offsets[i] = int(v1) % M
+		skips[i] = (int(v2) % (M - 1)) + 1
+	}
+	done := 0
+	// fillLoop:
+	for done < len(r.table) {
+		for i, name := range sorted {
+			// next preference for member i
+			p := (offsets[i] + nextIdxs[i]*skips[i]) % M
+			nextIdxs[i]++
+
+			if len(r.table[p]) < replicas {
+				r.table[p] = append(r.table[p], name)
+				if len(r.table[p]) == replicas {
+					done++
+				}
+			}
+		}
 	}
 	return r, nil
 }
 
-// Replicas returns the number of replicas for each value in the hasher.
-func (m *MaglevHasher) Replicas() int {
-	return m.replicas
-}
-
-// Get returns the members corresponding to value. Get takes care of evenly
-// distributing values across members.
-func (m *MaglevHasher) Get(value string) []string {
-	// f := fnv.New64a()
-	// f.Write([]byte(value))
-	// s := f.Sum64()              // 213ns / op
-	s := fnv1a.HashString64(value) // 63ns / op
-	return m.At(s)
-}
-
-// At gets the members corresponding to i. At evenly distributes all possible
-// unsigned integers i across members.
-func (m *MaglevHasher) At(i uint64) []string {
-	idx := i / m.binSize
-	return m.table[idx]
-}
-
-// GetWithCoalescingSubset gets a set of members corresponding to clientName
-// value for a given coalescing level.
-//
-// GetWithCoalescingSubset will consider clientName and value up to bits, which
-// must be in [0, 64]. If bits is zero, GetWithCoalescingSubset always returns
-// the same members for all clientName and value. Otherwise,
-// GetWithCoalescingSubset returns at most one of 2^bits possible sets of
-// members.
-//
-// Passing a value for bits in excess of that returned by MaxBits does not
-// increase the number of possible return values.
-func (m *MaglevHasher) GetWithCoalescingSubset(clientName, value string, bits int) []string {
-
-	// NB: we cannot use common methods like deterministic subsetting[1]
-	// because we also need to coalesce around a single set of root nodes.
-	//
-	// [1]: https://sre.google/sre-book/load-balancing-datacenter
-
-	clientHash := fnv1a.HashString64(clientName)
-	valueHash := fnv1a.HashString64(value)
-
-	// Derive key with bits low-order bits of clientHash (C), and bits low-order
-	// bits of valueHash (V) in the highest possible position.
-	//
-	//   E.g. bits==4 --> clientHash == _____CCCC
-	//                    valueHash  == _____VVVV
-	//                    xor        == _____XXXX
-	//                    key        == XXXX0000....
-
-	mask := uint64(math.MaxUint64) >> (64 - bits)
-	clientHash &= mask
-	valueHash &= mask
-	clientHash <<= (64 - bits)
-	valueHash <<= (64 - bits)
-	key := clientHash ^ valueHash
-	return m.At(key)
-}
-
-// MaxBits returns the number of bits.
-func (m *MaglevHasher) MaxBits() int {
-	return int(math.Ceil(math.Log2(float64(m.Len()))))
-}
-
-func (m *MaglevHasher) Len() int {
-	return len(m.members)
-}
-
-func (m *MaglevHasher) dump() string {
-	b := &bytes.Buffer{}
-	for i, memNo := range m.table {
-		fmt.Fprintf(b, "%d: %s\n", i, memNo)
-	}
-	return b.String()
-}
+// Dispatch gets the members corresponding to i. At evenly distributes all
+// possible unsigned integers i across members.
+func (m *MaglevHasher) Dispatch(i uint64) []string { return m.table[i/m.binSize] }
+func (m *MaglevHasher) Len() int                   { return m.members }
