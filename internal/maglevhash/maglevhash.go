@@ -40,7 +40,7 @@ type MaglevHasher struct {
 	binSize  uint64
 }
 
-func fill(key string, names []string, table [][]string, replicas int, unique bool) {
+func fill(key string, names []string, table [][]string, replicas int) {
 	if replicas < 1 {
 		panic("replicas must be zero or greater")
 	}
@@ -58,23 +58,15 @@ func fill(key string, names []string, table [][]string, replicas int, unique boo
 		skips[i] = (int(v2) % (M - 1)) + 1
 	}
 	done := 0
-	used := make(map[string]struct{})
 	// fillLoop:
 	for done < len(table) {
 		for i, name := range names {
-			if unique {
-				if _, ok := used[name]; ok {
-					continue
-				}
-			}
-
 			// next preference for member i
 			p := (offsets[i] + nextIdxs[i]*skips[i]) % M
 			nextIdxs[i]++
 
 			if len(table[p]) < replicas {
 				table[p] = append(table[p], name)
-				used[name] = struct{}{}
 				if len(table[p]) == replicas {
 					done++
 				}
@@ -110,7 +102,7 @@ func New(members []string, replicas int) (*MaglevHasher, error) {
 		r.table[i] = make([]string, 0, replicas) // preallocate
 	}
 	if len(members) > 0 {
-		fill("", sorted, r.table, replicas, false)
+		fill("", sorted, r.table, replicas)
 	}
 	return r, nil
 }
