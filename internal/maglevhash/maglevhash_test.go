@@ -33,17 +33,23 @@ func BenchmarkNextPrime(b *testing.B) {
 	}
 }
 
+func BenchmarkCoarsePrimeSafety(b *testing.B) {
+	for i := 0; i < 10; i++ {
+		b.Run(fmt.Sprintf("coarsePrimeSafety==%d", 1<<i), func(b *testing.B) {
+			for j := 0; j < b.N; j++ {
+				nextPrimeImpl(j, 1<<i)
+			}
+		})
+	}
+}
+
 func BenchmarkNewIterations(b *testing.B) {
 	// goos: linux
 	// goarch: amd64
 	// pkg: github.com/vsekhar/peers/internal/maglevhash
 	// cpu: Intel(R) Xeon(R) W-2135 CPU @ 3.70GHz
-	// BenchmarkNewIterations-12    	       4	 267345594 ns/op	 7406542 B/op	  104084 allocs/op
+	// BenchmarkNewIterations-12    	       3	 418120161 ns/op	 9662330 B/op	  135318 allocs/op
 
-	// TODO: used to be?:
-	// BenchmarkNewIterations-12    	      54	  21714886 ns/op	  901007 B/op	   14098 allocs/op
-
-	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := New(members, benchmarkReplicas)
 		if err != nil {
@@ -57,16 +63,15 @@ func BenchmarkNewMembers(b *testing.B) {
 	// goarch: amd64
 	// pkg: github.com/vsekhar/peers/internal/maglevhash
 	// cpu: Intel(R) Xeon(R) W-2135 CPU @ 3.70GHz
-	// BenchmarkNewMembers/1_members-12         	     412	   2931855 ns/op	  172392 B/op	    4191 allocs/op
-	// BenchmarkNewMembers/10_members-12        	     249	   4614355 ns/op	  238576 B/op	    5143 allocs/op
-	// BenchmarkNewMembers/50_members-12        	     100	  12651615 ns/op	  529866 B/op	    9083 allocs/op
-	// BenchmarkNewMembers/100_members-12       	      52	  21520529 ns/op	  900888 B/op	   14098 allocs/op
-	// BenchmarkNewMembers/1000_members-12      	       4	 275457847 ns/op	 7406024 B/op	  104083 allocs/op
+	// BenchmarkNewMembers/1_members-12         	     344	   3206013 ns/op	  178398 B/op	    4337 allocs/op
+	// BenchmarkNewMembers/10_members-12        	     212	   5202029 ns/op	  245953 B/op	    5229 allocs/op
+	// BenchmarkNewMembers/50_members-12        	      63	  18446212 ns/op	  775608 B/op	   12426 allocs/op
+	// BenchmarkNewMembers/100_members-12       	      39	  34675263 ns/op	 1368225 B/op	   20616 allocs/op
+	// BenchmarkNewMembers/1000_members-12      	       3	 397203459 ns/op	 9662330 B/op	  135318 allocs/op
 
 	memCount := []int{1, 10, 50, 100, 1000}
 	for _, c := range memCount {
 		b.Run(fmt.Sprintf("%d_members", c), func(b *testing.B) {
-			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				_, err := New(members[:c], benchmarkReplicas)
 				if err != nil {
@@ -224,8 +229,8 @@ func TestFirstReplicaStats(t *testing.T) {
 	}
 
 	entryCounts := make(map[string]int)
-	for _, memNo := range m.table {
-		entryCounts[memNo[0]]++
+	for _, entryMembers := range m.table {
+		entryCounts[entryMembers[0]]++
 	}
 	if len(entryCounts) != len(members) {
 		t.Errorf("bad distribution: some members do not appear first")
@@ -234,10 +239,10 @@ func TestFirstReplicaStats(t *testing.T) {
 	for _, count := range entryCounts {
 		entryCountsFloat = append(entryCountsFloat, float64(count))
 	}
-	const (
-		targetMean    = 100.0
-		meanTolerance = 0.1
-		maxStdDev     = 8.0
+	var (
+		targetMean    = float64(len(m.table) / len(members))
+		meanTolerance = 1.0
+		maxStdDev     = 10.0
 	)
 	testStat(t, entryCountsFloat, targetMean, meanTolerance, 0, maxStdDev)
 }
@@ -310,7 +315,7 @@ func TestIntDistribution(t *testing.T) {
 		targetMean    = 100.0
 		meanTolerance = 0.1
 		minStdDev     = 0
-		maxStdDev     = 15.0
+		maxStdDev     = 20.0
 	)
 	testStat(t, counts, targetMean, meanTolerance, minStdDev, maxStdDev)
 }
@@ -342,6 +347,10 @@ func TestStringDistribution(t *testing.T) {
 		maxStdDev     = 180.0
 	)
 	testStat(t, counts, targetMean, meanTolerance, minStdDev, maxStdDev)
+}
+
+func TestStableHash(t *testing.T) {
+	// TODO: test that the tables are stable-ish as members come and go
 }
 
 func TestBigInt(t *testing.T) {
@@ -385,8 +394,8 @@ func TestCoalescing(t *testing.T) {
 			if uniquesDiff < 0 {
 				uniquesDiff = -uniquesDiff
 			}
-			if uniquesDiff > (1 << bits / 10) {
-				t.Errorf("expected within 10%% of %d unique names, got %d", 1<<bits, len(names))
+			if uniquesDiff > (1 << bits / 8) {
+				t.Errorf("expected within 12.5%% of %d unique names, got %d", 1<<bits, len(names))
 			}
 			counts := make([]float64, 0, len(names))
 			for _, c := range names {
