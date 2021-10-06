@@ -12,11 +12,12 @@ import (
 	"strings"
 
 	"github.com/soheilhy/cmux"
-	"github.com/vsekhar/peers/internal/last"
+	"github.com/vsekhar/peers/internal/circular"
 )
 
 const tagAck = "pok"
-const packetBufferSize = 1024
+const maxPacketSize = 1024
+const packetBufferLength = 16
 
 func matchTag(tag string) func(r io.Reader) bool {
 	return func(r io.Reader) bool {
@@ -37,12 +38,12 @@ type packet struct {
 }
 type taggedTransport struct {
 	Interface
-	ctx          context.Context
-	cancel       func()
-	muxListener  net.Listener
-	tag          string
-	matcher      func(r io.Reader) bool
-	latestPacket *last.Buffer // *packet
+	ctx         context.Context
+	cancel      func()
+	muxListener net.Listener
+	tag         string
+	matcher     func(r io.Reader) bool
+	packets     *circular.Buffer //  *packet
 }
 
 func (t *taggedTransport) Close() error {
@@ -103,13 +104,13 @@ func (t *taggedTransport) Accept() (net.Conn, error) {
 }
 
 func (t *taggedTransport) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
-	packet := t.latestPacket.LoadOrWait().(*packet)
+	packet := t.packets.LoadOrWait().(*packet)
 	n = copy(p, packet.payload)
 	return n, packet.addr, nil
 }
 
 func (t *taggedTransport) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	var ar [packetBufferSize]byte
+	var ar [maxPacketSize]byte
 	buf := ar[:]
 	i := binary.PutUvarint(buf, uint64(len([]byte(t.tag))))
 	i += copy(buf[i:], []byte(t.tag))
@@ -131,13 +132,13 @@ func Tagged(transport Interface, logger *log.Logger, tags ...string) map[string]
 		ctx, cancel := context.WithCancel(context.Background())
 		matcher := matchTag(t)
 		r[t] = &taggedTransport{
-			Interface:    transport,
-			ctx:          ctx,
-			cancel:       cancel,
-			muxListener:  mux.Match(matcher),
-			tag:          t,
-			matcher:      matcher,
-			latestPacket: last.NewBuffer(),
+			Interface:   transport,
+			ctx:         ctx,
+			cancel:      cancel,
+			muxListener: mux.Match(matcher),
+			tag:         t,
+			matcher:     matcher,
+			packets:     circular.NewBuffer(packetBufferLength),
 		}
 	}
 	mux.HandleError(func(err error) bool {
@@ -157,7 +158,7 @@ func Tagged(transport Interface, logger *log.Logger, tags ...string) map[string]
 		}
 	}()
 	go func() {
-		buf := make([]byte, packetBufferSize)
+		buf := make([]byte, maxPacketSize)
 		for {
 			totalLength, addr, err := transport.ReadFrom(buf)
 			if err != nil && logger != nil {
@@ -170,7 +171,7 @@ func Tagged(transport Interface, logger *log.Logger, tags ...string) map[string]
 				continue
 			}
 			if t, ok := r[string(buf[n:n+int(s)])]; ok {
-				t.latestPacket.Store(&packet{payload: buf[n+int(s) : totalLength], addr: addr})
+				t.packets.Store(&packet{payload: buf[n+int(s) : totalLength], addr: addr})
 			}
 		}
 	}()
