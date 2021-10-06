@@ -350,7 +350,30 @@ func TestStringDistribution(t *testing.T) {
 }
 
 func TestStableHash(t *testing.T) {
-	// TODO: test that the tables are stable-ish as members come and go
+	const (
+		delta    = 10    // members removed
+		maxDiffs = 0.007 // 0.7% changed entries per member removed
+	)
+	m1, err := New(members, testReplicas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m2, err := New(members[:len(members)-delta], testReplicas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diffs := 0
+	for i, ms := range m1.table {
+		for j, m := range ms {
+			if m != m2.table[i][j] {
+				diffs++
+			}
+		}
+	}
+	pdiffs := float64(diffs) / float64(len(m1.table)) / float64(delta)
+	if pdiffs > maxDiffs {
+		t.Errorf("expected <%f%% differences, got %f%% differences", maxDiffs*100, pdiffs*100)
+	}
 }
 
 func TestBigInt(t *testing.T) {
