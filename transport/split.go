@@ -15,7 +15,7 @@ import (
 	"github.com/vsekhar/peers/internal/circular"
 )
 
-const tagAck = "pok"
+const tagAck = "tok"
 const maxPacketSize = 1024
 const packetBufferLength = 16
 
@@ -36,7 +36,7 @@ type packet struct {
 	payload []byte
 	addr    net.Addr
 }
-type taggedTransport struct {
+type splitTransport struct {
 	Interface
 	ctx         context.Context
 	cancel      func()
@@ -46,21 +46,21 @@ type taggedTransport struct {
 	packets     *circular.Buffer //  *packet
 }
 
-func (t *taggedTransport) Close() error {
+func (t *splitTransport) Close() error {
 	e1 := t.muxListener.Close()
 	t.cancel()
 	e2 := t.Interface.Close()
 	if e1 != nil || e2 != nil {
-		return fmt.Errorf("tagged: mux %w, transport %v", e1, e2)
+		return fmt.Errorf("transport: split mux %w, transport %v", e1, e2)
 	}
 	return nil
 }
 
-func (t *taggedTransport) Dial(network, address string) (net.Conn, error) {
+func (t *splitTransport) Dial(network, address string) (net.Conn, error) {
 	return t.DialContext(context.Background(), network, address)
 }
 
-func (t *taggedTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (t *splitTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	c, err := t.Interface.DialContext(ctx, network, address)
 	if err != nil {
 		return c, err
@@ -82,7 +82,7 @@ func (t *taggedTransport) DialContext(ctx context.Context, network, address stri
 	return c, nil
 }
 
-func (t *taggedTransport) Accept() (net.Conn, error) {
+func (t *splitTransport) Accept() (net.Conn, error) {
 	c, err := t.muxListener.Accept()
 	if err != nil {
 		return c, err
@@ -90,7 +90,7 @@ func (t *taggedTransport) Accept() (net.Conn, error) {
 
 	// cmux peaks for the tag but doesn't consume it, so we consume it here.
 	if !t.matcher(c) {
-		return c, fmt.Errorf("peers: tagged transport internal error: tag does not match")
+		return c, fmt.Errorf("peers: split transport internal error: tag does not match")
 	}
 	n, err := c.Write([]byte(tagAck))
 	if err != nil {
@@ -103,13 +103,13 @@ func (t *taggedTransport) Accept() (net.Conn, error) {
 	return c, nil
 }
 
-func (t *taggedTransport) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+func (t *splitTransport) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	packet := t.packets.LoadOrWait().(*packet)
 	n = copy(p, packet.payload)
 	return n, packet.addr, nil
 }
 
-func (t *taggedTransport) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+func (t *splitTransport) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	var ar [maxPacketSize]byte
 	buf := ar[:]
 	i := binary.PutUvarint(buf, uint64(len([]byte(t.tag))))
@@ -125,13 +125,13 @@ func (t *taggedTransport) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	return n, err
 }
 
-func Tagged(transport Interface, logger *log.Logger, tags ...string) map[string]Interface {
-	r := make(map[string]*taggedTransport, len(tags))
+func Split(transport Interface, logger *log.Logger, tags ...string) map[string]Interface {
+	r := make(map[string]*splitTransport, len(tags))
 	mux := cmux.New(transport)
 	for _, t := range tags {
 		ctx, cancel := context.WithCancel(context.Background())
 		matcher := matchTag(t)
-		r[t] = &taggedTransport{
+		r[t] = &splitTransport{
 			Interface:   transport,
 			ctx:         ctx,
 			cancel:      cancel,

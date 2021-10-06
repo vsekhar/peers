@@ -109,7 +109,7 @@ func TestSystem(t *testing.T) {
 	exchangeUDP(t, s)
 }
 
-func TestTagged(t *testing.T) {
+func TestSplit(t *testing.T) {
 	sysTrans, err := transport.System(":0")
 	if err != nil {
 		t.Fatal(err)
@@ -118,10 +118,10 @@ func TestTagged(t *testing.T) {
 	tlsTrans := transport.TLSWithInsecureUDP(sysTrans, testtls.Config())
 	defer check(t, tlsTrans.Close)
 	logger := testlog.New()
-	taggedTrans := transport.Tagged(tlsTrans, logger.Std(), "test1", "test2")
-	exchangeTCP(t, taggedTrans["test1"])
-	exchangeUDP(t, taggedTrans["test1"])
-	exchangeUDP(t, taggedTrans["test2"])
+	splitTrans := transport.Split(tlsTrans, logger.Std(), "test1", "test2")
+	exchangeTCP(t, splitTrans["test1"])
+	exchangeUDP(t, splitTrans["test1"])
+	exchangeUDP(t, splitTrans["test2"])
 	logger.ErrorIfNotEmpty(t)
 }
 

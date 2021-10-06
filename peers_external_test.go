@@ -57,19 +57,19 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *
 		tcfg := testtls.Config()
 		tcfg.ServerName = fmt.Sprintf("peer%d", i)
 		tlsTrans := transport.TLSWithInsecureUDP(sysTrans, tcfg)
-		tagged := transport.Tagged(tlsTrans, logger, peerNetTag, rpcNetTag)
+		split := transport.Split(tlsTrans, logger, peerNetTag, rpcNetTag)
 		discoverer, err := local.New(ctx, sysTrans.Addr().String(), logger)
 		if err != nil {
 			t.Fatal(err)
 		}
 		cfg := peers.Config{
 			NodeName:   tcfg.ServerName,
-			Transport:  tagged[peerNetTag],
+			Transport:  split[peerNetTag],
 			Logger:     logger,
 			Discoverer: discoverer,
 		}
 		r.peers[i], err = peers.New(ctx, cfg)
-		r.rpcListeners[i] = tagged[rpcNetTag]
+		r.rpcListeners[i] = split[rpcNetTag]
 		if err != nil {
 			t.Fatal(err)
 		}
