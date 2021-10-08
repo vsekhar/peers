@@ -27,6 +27,7 @@ func (l *Logger) Std() *log.Logger {
 }
 
 func (l *Logger) ErrorIfEmpty(t *testing.T) {
+	t.Helper()
 	l.buf.Stop()
 	defer l.buf.Start()
 	logs := l.buf.String()
@@ -36,6 +37,7 @@ func (l *Logger) ErrorIfEmpty(t *testing.T) {
 }
 
 func (l *Logger) ErrorIfNotEmpty(t *testing.T) {
+	t.Helper()
 	l.buf.Stop()
 	defer l.buf.Start()
 	logs := l.buf.String()
@@ -45,6 +47,7 @@ func (l *Logger) ErrorIfNotEmpty(t *testing.T) {
 }
 
 func (l *Logger) ErrorIfContains(t *testing.T, substr ...string) {
+	t.Helper()
 	l.buf.Stop()
 	defer l.buf.Start()
 	logs := l.buf.String()
@@ -57,6 +60,7 @@ func (l *Logger) ErrorIfContains(t *testing.T, substr ...string) {
 }
 
 func (l *Logger) ErrorIfContainsMoreThan(t *testing.T, substr string, n int) {
+	t.Helper()
 	l.buf.Stop()
 	defer l.buf.Start()
 	logs := l.buf.String()
@@ -69,4 +73,10 @@ func (l *Logger) Flush() string {
 	l.buf.Stop()
 	defer l.buf.Start()
 	return l.buf.String()
+}
+
+func (l *Logger) Clear() {
+	l.buf.Stop()
+	defer l.buf.Start()
+	l.buf = &syncbuf.Syncbuf{}
 }

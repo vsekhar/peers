@@ -85,7 +85,7 @@ func TestPeers(t *testing.T) {
 	logger := testlog.New()
 	ps := makeCluster(ctx, t, numPeers, logger.Std())
 
-	time.Sleep(500 * time.Millisecond) // let peers gossip
+	time.Sleep(250 * time.Millisecond) // let peers gossip
 
 	goForEach(ctx, ps.peers, func(p *peers.Peers, i int) {
 		if p.NumPeers() != numPeers {
@@ -100,21 +100,18 @@ func TestPeers(t *testing.T) {
 	logger.ErrorIfContains(t,
 		"ERR",
 		"ERROR",
-		"error",
-		"WARN")
-
-	goForEach(ctx, ps.peers, func(p *peers.Peers, _ int) {
-		p.Shutdown()
-	})
-	cancel()
-
-	// Still flaky, data corruption errors around the time of leaving
-	logger.ErrorIfEmpty(t)
-	logger.ErrorIfContains(t,
-		"ERR",
-		"ERROR",
 		"error")
+
 	// There's usually at least one invalid UDP packet, probably due to MTU
 	// discovery.
 	logger.ErrorIfContainsMoreThan(t, "[WARN] memberlist: Got invalid checksum for UDP packet", 1)
+	logger.Clear()
+
+	goForEach(ctx, ps.peers, func(p *peers.Peers, _ int) {
+		if err := p.Shutdown(); err != nil && err.Error() != "timeout waiting for leave broadcast" {
+			t.Error(err)
+		}
+	})
+	cancel()
+	logger.ErrorIfNotEmpty(t)
 }

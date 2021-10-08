@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"time"
 
 	"github.com/hashicorp/memberlist"
 	"github.com/hashicorp/serf/serf"
 	"github.com/vsekhar/peers/discovery"
+	"github.com/vsekhar/peers/internal/backoff"
 	"github.com/vsekhar/peers/internal/singlego"
 	"github.com/vsekhar/peers/transport"
 )
@@ -84,52 +84,28 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 
 	// Discover members
 	if cfg.Discoverer != nil {
-		go func() {
-			cache := make(map[string]struct{})
-			runsWithoutNew := 0
-			interval := time.Duration(0)
-			for {
-				select {
-				case <-time.After(interval):
-				case <-srf.ShutdownCh():
-					return
-				case <-ctx.Done():
-					return
+		cache := make(map[string]struct{})
+		backoff.Probe(ctx, func() bool {
+			mems := cfg.Discoverer.Discover()
+			var newMems []string
+			newCache := make(map[string]struct{}, len(cache))
+			for _, m := range mems {
+				if _, ok := cache[m]; !ok {
+					newMems = append(newMems, m)
 				}
-				start := time.Now()
-				mems := cfg.Discoverer.Discover()
-				var newMems []string
-				newCache := make(map[string]struct{}, len(cache))
-				for _, m := range mems {
-					if _, ok := cache[m]; !ok {
-						newMems = append(newMems, m)
-					}
-					newCache[m] = struct{}{}
-				}
-				cache = newCache
-
-				if len(newMems) > 0 {
-					if srf.State() != serf.SerfAlive {
-						return
-					}
-					_, err := srf.Join(newMems, true)
-					if err != nil && cfg.Logger != nil {
-						cfg.Logger.Printf("peers: join error: %v", err)
-					}
-					runsWithoutNew = 0
-				} else {
-					runsWithoutNew++
-					if runsWithoutNew > 5 {
-						runsWithoutNew = 5
-					}
-				}
-
-				interval = (1<<runsWithoutNew)*time.Second - time.Since(start)
-				if p.NumPeers() == 0 {
-					interval = 1 * time.Second
-				}
+				newCache[m] = struct{}{}
 			}
-		}()
+			cache = newCache
+
+			if len(newMems) > 0 {
+				_, err := srf.Join(newMems, true)
+				if err != nil && cfg.Logger != nil {
+					cfg.Logger.Printf("peers: join error: %v", err)
+				}
+				return false // probe more frequently
+			}
+			return true // probe less frequently
+		})
 	}
 
 	// Listen for membership changes
