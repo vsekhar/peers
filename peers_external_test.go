@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sync"
+	"runtime"
 	"testing"
 	"time"
 
@@ -13,6 +13,7 @@ import (
 	"github.com/vsekhar/peers/internal/testlog"
 	"github.com/vsekhar/peers/internal/testtls"
 	"github.com/vsekhar/peers/transport"
+	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -20,16 +21,16 @@ const (
 	rpcNetTag  = "prc"
 )
 
-func goForEach(ps []*peers.Peers, f func(p *peers.Peers, i int)) {
-	wg := sync.WaitGroup{}
-	wg.Add(len(ps))
+func goForEach(ctx context.Context, ps []*peers.Peers, f func(p *peers.Peers, i int)) {
+	sem := semaphore.NewWeighted(int64(runtime.NumCPU()))
 	for i := range ps {
+		sem.Acquire(ctx, 1)
 		go func(i int) {
-			defer wg.Done()
+			defer sem.Release(1)
 			f(ps[i], i)
 		}(i)
 	}
-	wg.Wait()
+	sem.Acquire(ctx, int64(runtime.NumCPU()))
 }
 
 type testPeers struct {
@@ -43,7 +44,7 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *
 		rpcListeners: make([]transport.Interface, n),
 	}
 
-	goForEach(r.peers, func(p *peers.Peers, i int) {
+	goForEach(ctx, r.peers, func(p *peers.Peers, i int) {
 		sysTrans, err := transport.System(":0")
 		if err != nil {
 			t.Fatal(err)
@@ -86,7 +87,7 @@ func TestPeers(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond) // let peers gossip
 
-	goForEach(ps.peers, func(p *peers.Peers, i int) {
+	goForEach(ctx, ps.peers, func(p *peers.Peers, i int) {
 		if p.NumPeers() != numPeers {
 			t.Errorf("peer %d has %d peers, expected %d peers", i, p.NumPeers(), numPeers)
 			t.Errorf("peers of %v: %v", p.LocalAddr(), p.Members())
@@ -102,7 +103,7 @@ func TestPeers(t *testing.T) {
 		"error",
 		"WARN")
 
-	goForEach(ps.peers, func(p *peers.Peers, _ int) {
+	goForEach(ctx, ps.peers, func(p *peers.Peers, _ int) {
 		p.Shutdown()
 	})
 	cancel()
