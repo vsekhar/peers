@@ -119,6 +119,11 @@ func TestSplit(t *testing.T) {
 	defer check(t, tlsTrans.Close)
 	logger := testlog.New()
 	splitTrans := transport.Split(tlsTrans, logger.Std(), "test1", "test2")
+	defer func() {
+		for _, st := range splitTrans {
+			check(t, st.Close)
+		}
+	}()
 	exchangeTCP(t, splitTrans["test1"])
 	exchangeUDP(t, splitTrans["test1"])
 	exchangeUDP(t, splitTrans["test2"])
