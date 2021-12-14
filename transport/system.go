@@ -23,7 +23,8 @@ func (s *sysTransport) Close() error {
 }
 
 func (s *sysTransport) LocalAddr() net.Addr {
-	// TODO: why is this needed? Embedded PacketConn provides LocalAddr...
+	// Disambiguate between the LocalAddr() of the embedded *net.Dailer and that
+	// of the embedded net.PacketConn.
 	return s.PacketConn.LocalAddr()
 }
 
