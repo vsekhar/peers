@@ -3,6 +3,7 @@ package transport_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -15,12 +16,12 @@ import (
 
 const payload = "testpayload"
 
-func exchangeTCP(t *testing.T, trans transport.Interface) {
+func exchangeTCP(t *testing.T, t1, t2 transport.Interface) {
 	wg := new(sync.WaitGroup)
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		c, err := trans.Accept() // TODO: hangs here
+		c, err := t1.Accept()
 		if err != nil {
 			t.Error(err)
 			return
@@ -28,7 +29,7 @@ func exchangeTCP(t *testing.T, trans transport.Interface) {
 		defer c.Close()
 		buf := make([]byte, len(payload))
 		n, err := c.Read(buf)
-		if err != nil {
+		if err != nil && !errors.Is(err, io.EOF) {
 			t.Error(err)
 		}
 		if n != len(payload) {
@@ -40,8 +41,9 @@ func exchangeTCP(t *testing.T, trans transport.Interface) {
 	}()
 	go func() {
 		defer wg.Done()
-		a := trans.Addr()
-		c, err := trans.DialContext(context.Background(), a.Network(), a.String())
+		a := t1.Addr()
+		t.Logf("Dialing: %s", a)
+		c, err := t2.DialContext(context.Background(), a.Network(), a.String())
 		if err != nil {
 			t.Error(err)
 			return
@@ -59,12 +61,12 @@ func exchangeTCP(t *testing.T, trans transport.Interface) {
 
 }
 
-func exchangeUDP(t *testing.T, udp transport.Interface) {
+func exchangeUDP(t *testing.T, u1, u2 transport.Interface) {
 	wg := new(sync.WaitGroup)
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		n, err := udp.WriteTo([]byte(payload), udp.LocalAddr())
+		n, err := u1.WriteTo([]byte(payload), u2.LocalAddr())
 		if err != nil {
 			t.Error(err)
 			return
@@ -76,7 +78,7 @@ func exchangeUDP(t *testing.T, udp transport.Interface) {
 	go func() {
 		defer wg.Done()
 		buf := make([]byte, len(payload))
-		n, _, err := udp.ReadFrom(buf)
+		n, _, err := u2.ReadFrom(buf)
 		if err != nil {
 			t.Error(err)
 			return
@@ -105,8 +107,8 @@ func TestSystem(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer check(t, s.Close)
-	exchangeTCP(t, s)
-	exchangeUDP(t, s)
+	exchangeTCP(t, s, s)
+	exchangeUDP(t, s, s)
 }
 
 func TestSplit(t *testing.T) {
@@ -124,9 +126,9 @@ func TestSplit(t *testing.T) {
 			check(t, st.Close)
 		}
 	}()
-	exchangeTCP(t, splitTrans["test1"])
-	exchangeUDP(t, splitTrans["test1"])
-	exchangeUDP(t, splitTrans["test2"])
+	exchangeTCP(t, splitTrans["test1"], splitTrans["test1"])
+	exchangeUDP(t, splitTrans["test1"], splitTrans["test1"])
+	exchangeUDP(t, splitTrans["test2"], splitTrans["test2"])
 	logger.ErrorIfNotEmpty(t)
 }
 
@@ -137,6 +139,17 @@ func TestTLSInsecureUDP(t *testing.T) {
 	}
 	defer check(t, s.Close)
 	tlsTrans := transport.TLSWithInsecureUDP(s, testtls.Config())
-	exchangeTCP(t, tlsTrans)
-	exchangeUDP(t, tlsTrans)
+	exchangeTCP(t, tlsTrans, tlsTrans)
+	exchangeUDP(t, tlsTrans, tlsTrans)
+}
+
+func TestQUIC(t *testing.T) {
+	s, err := transport.System(":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check(t, s.Close)
+	q := transport.QUIC(s, testtls.Config())
+	exchangeTCP(t, q, q)
+	exchangeUDP(t, q, q)
 }

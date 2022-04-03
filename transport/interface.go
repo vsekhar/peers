@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"net"
+	"syscall"
 )
 
 type Dialer interface {
@@ -18,4 +19,8 @@ type Interface interface {
 	net.Listener
 	ContextDialer
 	net.PacketConn
+
+	// For QUIC
+	SetReadBuffer(int) error
+	SyscallConn() (syscall.RawConn, error)
 }

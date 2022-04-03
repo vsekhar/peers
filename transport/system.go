@@ -3,6 +3,7 @@ package transport
 import (
 	"fmt"
 	"net"
+	"syscall"
 
 	reuse "github.com/libp2p/go-reuseport"
 )
@@ -26,6 +27,14 @@ func (s *sysTransport) LocalAddr() net.Addr {
 	// Disambiguate between the LocalAddr() of the embedded *net.Dailer and that
 	// of the embedded net.PacketConn.
 	return s.PacketConn.LocalAddr()
+}
+
+func (s *sysTransport) SetReadBuffer(i int) error {
+	return s.PacketConn.(*net.UDPConn).SetReadBuffer(i)
+}
+
+func (s *sysTransport) SyscallConn() (syscall.RawConn, error) {
+	return s.PacketConn.(*net.UDPConn).SyscallConn()
 }
 
 func System(address string) (Interface, error) {
