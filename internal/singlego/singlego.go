@@ -8,21 +8,30 @@ package singlego
 
 import "context"
 
-type Trigger chan struct{}
+type Trigger struct {
+	ctx    context.Context
+	cancel func()
+	ch     chan struct{}
+}
 
-func New(ctx context.Context, f func()) Trigger {
-	r := make(chan struct{}, 1) // must be buffered
+func New(ctx context.Context, f func()) *Trigger {
+	waitCtx, cancel := context.WithCancel(ctx)
+	r := &Trigger{
+		ctx:    waitCtx,
+		cancel: cancel,
+		ch:     make(chan struct{}, 1), // must be buffered
+	}
 	go func() {
 		for {
 			select {
-			case _, ok := <-r:
+			case _, ok := <-r.ch:
 				if !ok {
 					return
 				}
 				if f != nil {
 					f()
 				}
-			case <-ctx.Done():
+			case <-waitCtx.Done():
 				return
 			}
 		}
@@ -32,12 +41,12 @@ func New(ctx context.Context, f func()) Trigger {
 
 func (t Trigger) Notify() {
 	select {
-	case t <- struct{}{}:
+	case t.ch <- struct{}{}:
 	default:
 	}
 }
 
 func (t Trigger) Close() error {
-	close(t)
+	t.cancel()
 	return nil
 }
