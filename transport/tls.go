@@ -17,6 +17,8 @@ type tlsWithInsecureUDPTransport struct {
 	config *tls.Config
 }
 
+var _ Interface = (*tlsWithInsecureUDPTransport)(nil)
+
 func (t *tlsWithInsecureUDPTransport) Dial(network, address string) (net.Conn, error) {
 	return t.DialContext(context.Background(), network, address)
 }

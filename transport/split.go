@@ -46,6 +46,8 @@ type splitTransport struct {
 	packets     *circular.Buffer //  *packet
 }
 
+var _ Interface = (*splitTransport)(nil)
+
 func (t *splitTransport) Close() error {
 	e1 := t.muxListener.Close()
 	t.cancel()
