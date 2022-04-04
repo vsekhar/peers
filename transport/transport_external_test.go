@@ -42,7 +42,6 @@ func exchangeTCP(t *testing.T, t1, t2 transport.Interface) {
 	go func() {
 		defer wg.Done()
 		a := t1.Addr()
-		t.Logf("Dialing: %s", a)
 		c, err := t2.DialContext(context.Background(), a.Network(), a.String())
 		if err != nil {
 			t.Error(err)
@@ -152,4 +151,27 @@ func TestQUIC(t *testing.T) {
 	q := transport.QUIC(s, testtls.Config())
 	exchangeTCP(t, q, q)
 	exchangeUDP(t, q, q)
+}
+
+func TestTrace(t *testing.T) {
+	s, err := transport.System(":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check(t, s.Close)
+	l := testlog.New()
+	tracer := transport.Trace(s, l.Std())
+	defer check(t, tracer.Close)
+	exchangeTCP(t, tracer, tracer)
+	exchangeUDP(t, tracer, tracer)
+	l.ErrorIfEmpty(t)
+	l.ErrorIfNotContainsAnyOf(t, []string{
+		"closing",
+		"dialed",
+		"accepted",
+		"Read(",
+		"Write(",
+		"WriteTo",
+		"ReadFrom",
+	}...)
 }

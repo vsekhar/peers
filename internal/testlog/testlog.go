@@ -51,11 +51,15 @@ func (l *Logger) ErrorIfContains(t *testing.T, substr ...string) {
 	l.buf.Stop()
 	defer l.buf.Start()
 	logs := l.buf.String()
+	failed := false
 	for _, s := range substr {
 		if strings.Contains(logs, s) {
-			t.Error(logs)
-			return
+			failed = true
+			t.Errorf("Logs contain '%s'", s)
 		}
+	}
+	if failed {
+		t.Error(logs)
 	}
 }
 
@@ -65,6 +69,23 @@ func (l *Logger) ErrorIfContainsMoreThan(t *testing.T, substr string, n int) {
 	defer l.buf.Start()
 	logs := l.buf.String()
 	if strings.Count(logs, substr) > n {
+		t.Error(logs)
+	}
+}
+
+func (l *Logger) ErrorIfNotContainsAnyOf(t *testing.T, substr ...string) {
+	t.Helper()
+	l.buf.Stop()
+	defer l.buf.Start()
+	logs := l.buf.String()
+	failed := false
+	for _, s := range substr {
+		if !strings.Contains(logs, s) {
+			failed = true
+			t.Errorf("Logs do not contain '%s'", s)
+		}
+	}
+	if failed {
 		t.Error(logs)
 	}
 }
@@ -80,3 +101,19 @@ func (l *Logger) Clear() {
 	defer l.buf.Start()
 	l.buf = &syncbuf.Syncbuf{}
 }
+
+type Printfer interface {
+	Print(...interface{})
+	Printf(string, ...interface{})
+	Println(string, ...interface{})
+}
+
+type tWrapper struct{ *testing.T }
+
+func (t *tWrapper) Print(x ...interface{})             { t.Log(x...) }
+func (t *tWrapper) Printf(s string, x ...interface{})  { t.Logf(s, x...) }
+func (t *tWrapper) Println(s string, x ...interface{}) { t.Logf(s, x...) }
+
+// Wrap wraps a *testing.T so that it has Print{,f,ln} methods, behaving more
+// like a *log.Logger.
+func Wrap(t *testing.T) Printfer { return &tWrapper{t} }
