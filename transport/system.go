@@ -10,12 +10,12 @@ import (
 type sysTransport struct {
 	net.Listener
 	*net.Dialer
-	udpConn
+	*net.UDPConn
 }
 
 func (s *sysTransport) Close() error {
 	e1 := s.Listener.Close()
-	e2 := s.udpConn.Close()
+	e2 := s.UDPConn.Close()
 	if e1 != nil || e2 != nil {
 		return fmt.Errorf("transport: tcp %w, udp %v", e1, e2)
 	}
@@ -23,7 +23,7 @@ func (s *sysTransport) Close() error {
 }
 
 func (s *sysTransport) LocalAddr() net.Addr {
-	return s.udpConn.LocalAddr() // disambiguate *net.Dialoer and net.udpConn
+	return s.UDPConn.LocalAddr() // disambiguate *net.Dialer and net.udpConn
 }
 
 func System(address string) (Interface, error) {
@@ -40,7 +40,7 @@ func System(address string) (Interface, error) {
 		return &sysTransport{
 			Listener: tcp,
 			Dialer:   new(net.Dialer),
-			udpConn:  udp,
+			UDPConn:  udp,
 		}, nil
 	}
 	panic("transport: packet socket is not a UDP socket")
