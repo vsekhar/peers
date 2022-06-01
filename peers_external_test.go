@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"runtime"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ const (
 	rpcNetTag  = "prc"
 )
 
-func goForEach(ctx context.Context, ps []*peers.Peers, f func(p *peers.Peers, i int)) {
+func goForEach[E any](ctx context.Context, ps []E, f func(p E, i int)) {
 	sem := semaphore.NewWeighted(int64(runtime.NumCPU()))
 	for i := range ps {
 		sem.Acquire(ctx, 1)
@@ -43,6 +44,8 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *
 		peers:        make([]*peers.Peers, n),
 		rpcListeners: make([]transport.Interface, n),
 	}
+	path := local.GetBinarySpecificPath()
+	os.RemoveAll(path)
 
 	goForEach(ctx, r.peers, func(p *peers.Peers, i int) {
 		sysTrans, err := transport.System(":0")
@@ -59,7 +62,7 @@ func makeCluster(ctx context.Context, t *testing.T, n int, logger *log.Logger) *
 		tcfg.ServerName = fmt.Sprintf("peer%d", i)
 		tlsTrans := transport.TLSWithInsecureUDP(sysTrans, tcfg)
 		split := transport.Split(tlsTrans, logger, peerNetTag, rpcNetTag)
-		discoverer, err := local.New(ctx, sysTrans.Addr().String(), logger)
+		discoverer, err := local.New(ctx, path, sysTrans.Addr().String(), logger)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -85,10 +88,11 @@ func TestPeers(t *testing.T) {
 	logger := testlog.New()
 	ps := makeCluster(ctx, t, numPeers, logger.Std())
 
-	time.Sleep(250 * time.Millisecond) // let peers gossip
+	time.Sleep(1 * time.Second) // let peers gossip
 
 	goForEach(ctx, ps.peers, func(p *peers.Peers, i int) {
 		if p.NumPeers() != numPeers {
+			// This is still flakey.
 			t.Errorf("peer %d has %d peers, expected %d peers", i, p.NumPeers(), numPeers)
 			t.Errorf("peers of %v: %v", p.LocalAddr(), p.Members())
 		}

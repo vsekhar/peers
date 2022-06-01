@@ -2,45 +2,34 @@ package local
 
 import (
 	"context"
-	"fmt"
 	"log"
+	"os"
 	"testing"
-
-	"github.com/vsekhar/peers/discovery"
-	"github.com/vsekhar/peers/internal/syncbuf"
 )
 
-func within(i, target, within int) bool {
-	diff := i - target
-	if diff < 0 {
-		diff = -diff
-	}
-	if diff <= within {
-		return true
-	}
-	return false
-}
-
 func TestLocal(t *testing.T) {
-	numDiscoverers := 10
+	path := GetBinarySpecificPath()
+	defer func() {
+		os.RemoveAll(path)
+	}()
+	t.Logf("file: %s", path)
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	lbuf := &syncbuf.Syncbuf{}
-	logger := log.New(lbuf, "", log.LstdFlags|log.Lshortfile)
-
-	ds := make([]discovery.Interface, numDiscoverers)
-	for i := range ds {
-		var err error
-		ds[i], err = New(ctx, fmt.Sprintf("test%d", i), logger)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ds[i].Discover(ctx)
+	ctx := context.Background()
+	d1, err := New(ctx, path, "d1", log.Default())
+	if err != nil {
+		t.Fatal(err)
 	}
-	peers := ds[0].Discover(ctx)
-	if !within(len(peers), numDiscoverers-1, 1) {
-		// Some flakiness
-		t.Errorf("expected %d peers, got %d", 3, len(peers))
+	d2, err := New(ctx, path, "d2", log.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d1.Discover(ctx)
+	d2.Discover(ctx)
+	if msg := d1.Discover(ctx); msg != "d2" {
+		t.Errorf("expected 'd2', got '%s'", msg)
+	}
+	if msg := d2.Discover(ctx); msg != "d1" {
+		t.Errorf("expected 'd1', got '%s'", msg)
 	}
 }

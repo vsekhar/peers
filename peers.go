@@ -57,6 +57,13 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 	scfg.Logger = cfg.Logger
 	scfg.MemberlistConfig = memberlist.DefaultLANConfig()
 	var err error
+	if cfg.Transport == nil {
+		cfg.Transport, err = transport.System(":0")
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("creating default transport at ':0': %w", err)
+		}
+	}
 	scfg.MemberlistConfig.Transport, err = newSerfTransport(ctx, cfg.Transport)
 	if err != nil {
 		cancel()
@@ -86,21 +93,17 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 	if cfg.Discoverer != nil {
 		cache := make(map[string]struct{})
 		backoff.Probe(ctx, func(ctx context.Context) bool {
-			mems := cfg.Discoverer.Discover(ctx)
-			var newMems []string
-			newCache := make(map[string]struct{}, len(cache))
-			for _, m := range mems {
-				if _, ok := cache[m]; !ok {
-					newMems = append(newMems, m)
-				}
-				newCache[m] = struct{}{}
+			mem := cfg.Discoverer.Discover(ctx)
+			if mem == "" {
+				return false // probe more frequently
 			}
-			cache = newCache
-
-			if len(newMems) > 0 {
-				_, err := srf.Join(newMems, true)
-				if err != nil && cfg.Logger != nil {
-					cfg.Logger.Printf("peers: join error: %v", err)
+			if _, ok := cache[mem]; !ok {
+				if _, err := srf.Join([]string{mem}, true); err != nil {
+					if cfg.Logger != nil {
+						cfg.Logger.Printf("peers: join error: %v", err)
+					}
+				} else {
+					cache[mem] = struct{}{}
 				}
 				return false // probe more frequently
 			}

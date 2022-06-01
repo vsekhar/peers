@@ -1,98 +1,115 @@
 package local
 
 import (
+	"bufio"
 	"context"
+	"errors"
+	"fmt"
 	"log"
-	"net"
-	"sync"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/vsekhar/peers/discovery"
+	"github.com/vsekhar/peers/internal/atomic"
 )
 
-const (
-	// https://www.iana.org/assignments/multicast-addresses/multicast-addresses.xhtml
-	multicastGroupAddr = "224.0.0.151:1803"
-	cacheTimeout       = 30 * time.Second
-)
+const maxAge = 30 * time.Second
 
-func findLoopback() *net.Interface {
-	is, err := net.Interfaces()
+func GetBinarySpecificPath() string {
+	// For testing
+	execPath, err := os.Executable()
 	if err != nil {
-		return nil
+		panic(err)
 	}
-	for _, i := range is {
-		if (i.Flags & net.FlagLoopback) > 0 {
-			return &i
-		}
-	}
-	panic("no loopback interface found")
+	execPath = filepath.Base(execPath)
+	return filepath.Join(os.TempDir(), execPath)
 }
 
-var _ discovery.Interface = &udpMulticastDiscoverer{}
-
-type udpMulticastDiscoverer struct {
-	mu     sync.Mutex
+type localUnixDomainSocketDiscoverer struct {
+	path   string
 	me     string
-	uaddr  *net.UDPAddr
-	c      *net.UDPConn
-	cache  map[string]time.Time
 	logger *log.Logger
 }
 
-func New(ctx context.Context, me string, logger *log.Logger) (discovery.Interface, error) {
-	uaddr, err := net.ResolveUDPAddr("udp", multicastGroupAddr)
-	if err != nil {
-		return nil, err
-	}
-	c, err := net.ListenMulticastUDP("udp", findLoopback(), uaddr)
-	if err != nil {
-		return nil, err
-	}
-	r := &udpMulticastDiscoverer{
-		me:    me,
-		uaddr: uaddr,
-		c:     c,
-		cache: make(map[string]time.Time),
-	}
-	go func() {
-		buf := make([]byte, 1024)
-		for {
-			n, _, err := c.ReadFrom(buf)
-			if err != nil && logger != nil {
-				logger.Printf("peers: error reading multicast udp packet: %v", err)
-				continue
-			}
-			member := string(buf[:n])
-			r.mu.Lock()
-			r.cache[member] = time.Now()
-			r.mu.Unlock()
-		}
-	}()
-	return r, nil
+func New(ctx context.Context, path, me string, logger *log.Logger) (discovery.Interface, error) {
+	return &localUnixDomainSocketDiscoverer{
+		path:   path,
+		me:     me,
+		logger: logger,
+	}, nil
 }
 
-func (u *udpMulticastDiscoverer) Discover(_ context.Context) []string {
-	go func() {
-		n, err := u.c.WriteTo([]byte(u.me), u.uaddr)
-		if err != nil && u.logger != nil {
-			u.logger.Printf("peers: failed to send discovery message: %v", err)
-		}
-		if n != len(u.me) && u.logger != nil {
-			u.logger.Printf("peers: discovery message short write")
-		}
-	}()
+type entry struct {
+	addrPort string
+	seconds  int64
+}
 
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	start := time.Now()
-	r := make([]string, 0, len(u.cache))
-	for m, t := range u.cache {
-		if start.Sub(t) > cacheTimeout {
-			delete(u.cache, m)
+func (l *localUnixDomainSocketDiscoverer) Discover(ctx context.Context) string {
+	f, err := os.Open(l.path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			l.logger.Printf("peers-discover-local opening %s: %v", l.path, err)
+			return ""
+		}
+		f, err = os.Create(l.path)
+		if err != nil {
+			l.logger.Printf("peers-discover-local creating %s: %v", l.path, err)
+			return ""
+		}
+	}
+
+	// read existing, pick random row
+	scanner := bufio.NewScanner(f)
+	entries := make([]entry, 0)
+	for scanner.Scan() {
+		t := scanner.Text()
+
+		// entries are <address:port> <timestamp>
+		// e.g. 127.0.0.1:5493 428792859837
+		parts := strings.Split(t, " ")
+		if len(parts) != 2 {
+			l.logger.Printf("peers-discover-local bad entry '%s' in %s: %v", t, l.path, err)
 			continue
 		}
-		r = append(r, m)
+		addrPort, tStr := parts[0], parts[1]
+		if addrPort == l.me {
+			continue
+		}
+		seconds, err := strconv.ParseInt(tStr, 10, 64)
+		if err != nil {
+			l.logger.Printf("peers-discover-local bad entry '%s' in %s: %v", t, l.path, err)
+			continue
+		}
+		if time.Since(time.Unix(seconds, 0)) > maxAge {
+			continue
+		}
+		entries = append(entries, entry{addrPort, seconds})
 	}
-	return r
+	if err := scanner.Err(); err != nil {
+		l.logger.Printf("peers-discover-local scanning %s: %v", l.path, err)
+		return ""
+	}
+
+	var e entry
+	if len(entries) > 0 {
+		e = entries[rand.Intn(len(entries))]
+	}
+	entries = append(entries, entry{l.me, time.Now().Unix()})
+	af, err := atomic.Open(l.path)
+	if err != nil {
+		l.logger.Printf("peers-discover-local opening updated file %s: %v", l.path, err)
+		return ""
+	}
+	for _, e := range entries {
+		fmt.Fprintf(af, "%s %d\n", e.addrPort, e.seconds)
+	}
+	if err := af.Close(); err != nil {
+		l.logger.Printf("peers-discover-local committing updated file %s: %v", l.path, err)
+		return ""
+	}
+	return e.addrPort
 }
