@@ -3,6 +3,7 @@ package maglevhash
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"math/rand"
 	"testing"
 
@@ -27,19 +28,20 @@ func init() {
 	}
 }
 
-func BenchmarkNextPrime(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		nextPrime(i)
+func TestNextPrime(t *testing.T) {
+	const rounds = 100
+	for i := 0; i < rounds; i++ {
+		j := nextPrime(i)
+		bi := big.NewInt((int64(j)))
+		if !bi.ProbablyPrime(1000) {
+			t.Errorf("%d failed prime test", bi.Int64())
+		}
 	}
 }
 
-func BenchmarkCoarsePrimeSafety(b *testing.B) {
-	for i := 0; i < 10; i++ {
-		b.Run(fmt.Sprintf("coarsePrimeSafety==%d", 1<<i), func(b *testing.B) {
-			for j := 0; j < b.N; j++ {
-				nextPrimeImpl(j, 1<<i)
-			}
-		})
+func BenchmarkNextPrime(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		nextPrime(i)
 	}
 }
 

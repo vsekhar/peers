@@ -45,7 +45,7 @@ type Peers struct {
 	config       Config
 	transport    memberlist.Transport
 	serf         *serf.Serf
-	memberNotify singlego.Trigger
+	memberNotify *singlego.Trigger
 
 	addr net.Addr
 }
@@ -85,8 +85,8 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 	// Discover members
 	if cfg.Discoverer != nil {
 		cache := make(map[string]struct{})
-		backoff.Probe(ctx, func() bool {
-			mems := cfg.Discoverer.Discover()
+		backoff.Probe(ctx, func(ctx context.Context) bool {
+			mems := cfg.Discoverer.Discover(ctx)
 			var newMems []string
 			newCache := make(map[string]struct{}, len(cache))
 			for _, m := range mems {

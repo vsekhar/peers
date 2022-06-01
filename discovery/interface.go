@@ -1,5 +1,7 @@
 package discovery
 
+import "context"
+
 type Interface interface {
-	Discover() []string
+	Discover(ctx context.Context) []string
 }

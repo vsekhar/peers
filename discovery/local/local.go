@@ -72,7 +72,7 @@ func New(ctx context.Context, me string, logger *log.Logger) (discovery.Interfac
 	return r, nil
 }
 
-func (u *udpMulticastDiscoverer) Discover() []string {
+func (u *udpMulticastDiscoverer) Discover(_ context.Context) []string {
 	go func() {
 		n, err := u.c.WriteTo([]byte(u.me), u.uaddr)
 		if err != nil && u.logger != nil {

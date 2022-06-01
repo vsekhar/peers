@@ -20,12 +20,12 @@ import (
 // Probe returns immediately and calls to prober occur in a separate goroutine.
 // For any given call to Probe, only one invocation of prober will run at a
 // time.
-func Probe(ctx context.Context, prober func() bool) {
+func Probe(ctx context.Context, prober func(context.Context) bool) {
 	const maxShiftReg = 1 << 5 // 32 seconds
 
 	go func() {
 		shiftReg := 1 * time.Second
-		if prober() {
+		if prober(ctx) {
 			shiftReg <<= 1
 		} else {
 			shiftReg = 1

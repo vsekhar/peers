@@ -22,21 +22,15 @@ const (
 )
 
 func nextPrime(n int) int {
-	return nextPrimeImpl(n, coarsePrimeSafety)
-}
-
-func nextPrimeImpl(n, coarsePrimeSafety int) int {
-	// For benchmarking
-	b := big.NewInt(0)
 	for ; ; n++ {
-		b.SetInt64(int64(n))
-		if b.ProbablyPrime(coarsePrimeSafety) {
-			if b.ProbablyPrime(finePrimeSafety) {
-				return n
-			}
+		b := big.NewInt(int64(n)) // at most 2^63
+
+		// "ProbablyPrime is 100% accurate for inputs less than 2⁶⁴."
+		// -https://pkg.go.dev/math/big#Int.ProbablyPrime
+		if b.ProbablyPrime(0) {
+			return n
 		}
 	}
-
 }
 
 func m(n int) int {
@@ -107,7 +101,7 @@ func New(members []string, replicas int) (*MaglevHasher, error) {
 	return r, nil
 }
 
-// Dispatch gets the members corresponding to i. At evenly distributes all
+// Dispatch gets the members corresponding to i. Dispatch evenly distributes all
 // possible unsigned integers i across members.
 func (m *MaglevHasher) Dispatch(i uint64) []string {
 	// TODO: should this be mod? It might break coalescing

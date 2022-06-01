@@ -36,9 +36,9 @@ func TestLocal(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ds[i].Discover()
+		ds[i].Discover(ctx)
 	}
-	peers := ds[0].Discover()
+	peers := ds[0].Discover(ctx)
 	if !within(len(peers), numDiscoverers-1, 1) {
 		// Some flakiness
 		t.Errorf("expected %d peers, got %d", 3, len(peers))
