@@ -143,7 +143,9 @@ func (p *Peers) NumPeers() int {
 func (p *Peers) Members() []string {
 	r := make([]string, 0, p.NumPeers())
 	for _, p := range p.serf.Members() {
-		r = append(r, fmt.Sprintf("%s:%d", p.Addr.String(), p.Port))
+		if p.Status == serf.StatusAlive {
+			r = append(r, fmt.Sprintf("%s:%d", p.Addr.String(), p.Port))
+		}
 	}
 	return r
 }
