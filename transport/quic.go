@@ -31,22 +31,22 @@ type quicMessage struct {
 
 type quicConn struct {
 	quic.Stream
-	session quic.Session
+	conn quic.Connection
 }
 
 var _ net.Conn = (*quicConn)(nil)
 
 func (q *quicConn) Close() error         { return q.Stream.Close() }
-func (q *quicConn) LocalAddr() net.Addr  { return q.session.LocalAddr() }
-func (q *quicConn) RemoteAddr() net.Addr { return q.session.RemoteAddr() }
+func (q *quicConn) LocalAddr() net.Addr  { return q.conn.LocalAddr() }
+func (q *quicConn) RemoteAddr() net.Addr { return q.conn.RemoteAddr() }
 
 type quicSession2 struct {
 	ctx    context.Context
 	cancel func()
-	qSess  quic.Session
+	qConn  quic.Connection
 }
 
-func newQUICSession2(ctx context.Context, session quic.Session, streams chan<- *quicConn, messages chan<- *quicMessage) *quicSession2 {
+func newQUICSession2(ctx context.Context, session quic.Connection, streams chan<- *quicConn, messages chan<- *quicMessage) *quicSession2 {
 	sessCtx, cancel := context.WithCancel(ctx)
 
 	// Stream pump
@@ -167,21 +167,21 @@ func QUIC(transport Interface, tlsConfig *tls.Config) Interface {
 				log.Print(err)
 				continue
 			}
-			go func(s quic.Session) {
+			go func(c quic.Connection) {
 				// Receive then send IDs (opposite order than in getSession)
-				peerHostID, err := recvID(ctx, s)
+				peerHostID, err := recvID(ctx, c)
 				if err != nil {
-					s.CloseWithError(quic.ApplicationErrorCode(quic.InternalError), err.Error())
+					c.CloseWithError(quic.ApplicationErrorCode(quic.InternalError), err.Error())
 					return
 				}
-				if err := sendID(ctx, s, r.hostID); err != nil {
-					s.CloseWithError(quic.ApplicationErrorCode(quic.InternalError), err.Error())
+				if err := sendID(ctx, c, r.hostID); err != nil {
+					c.CloseWithError(quic.ApplicationErrorCode(quic.InternalError), err.Error())
 					return
 				}
 
-				session := newQUICSession2(ctx, s, r.streams, r.messages) // start after sendID & recvID
+				session := newQUICSession2(ctx, c, r.streams, r.messages) // start after sendID & recvID
 				r.cmu.Lock()
-				if oldSessionHostID, ok := r.hostIDs[s.RemoteAddr().String()]; ok {
+				if oldSessionHostID, ok := r.hostIDs[c.RemoteAddr().String()]; ok {
 					if bytes.Equal(oldSessionHostID[:], peerHostID[:]) {
 						if oldSession, ok := r.sessions[oldSessionHostID]; ok {
 							if err := oldSession.Close(); err != nil {
@@ -192,7 +192,7 @@ func QUIC(transport Interface, tlsConfig *tls.Config) Interface {
 						}
 					}
 				}
-				r.hostIDs[s.RemoteAddr().String()] = peerHostID
+				r.hostIDs[c.RemoteAddr().String()] = peerHostID
 				r.sessions[peerHostID] = session
 				r.cmu.Unlock()
 			}(s)
@@ -251,15 +251,15 @@ func (q *quicSessionManager) DialContext(ctx context.Context, network, address s
 	if err != nil {
 		return nil, err
 	}
-	qc, err := s.qSess.OpenStreamSync(ctx)
+	qc, err := s.qConn.OpenStreamSync(ctx)
 	if err != nil {
 		qc.Close()
 		s.Close()
 		return nil, err
 	}
 	return &quicConn{
-		Stream:  qc,
-		session: s.qSess,
+		Stream: qc,
+		conn:   s.qConn,
 	}, nil
 }
 
@@ -286,7 +286,7 @@ func (q *quicSessionManager) WriteTo(p []byte, addr net.Addr) (n int, err error)
 	if err != nil {
 		return 0, err
 	}
-	err = s.qSess.SendMessage(p)
+	err = s.qConn.SendMessage(p)
 	if err != nil {
 		return 0, err
 	}
@@ -300,8 +300,8 @@ func (q *quicSessionManager) Close() error {
 
 // TODO: use singleflight to create sessions to a host once
 
-func sendID(ctx context.Context, s quic.Session, hostID uuid.UUID) error {
-	stream, err := s.OpenUniStream()
+func sendID(ctx context.Context, c quic.Connection, hostID uuid.UUID) error {
+	stream, err := c.OpenUniStream()
 	if err != nil {
 		return err
 	}
@@ -316,10 +316,10 @@ func sendID(ctx context.Context, s quic.Session, hostID uuid.UUID) error {
 	return nil
 }
 
-func recvID(ctx context.Context, s quic.Session) (peerID uuid.UUID, err error) {
+func recvID(ctx context.Context, c quic.Connection) (peerID uuid.UUID, err error) {
 	acceptCtx, cancel := context.WithTimeout(ctx, quicTimeout)
 	defer cancel()
-	stream, err := s.AcceptUniStream(acceptCtx)
+	stream, err := c.AcceptUniStream(acceptCtx)
 	if err != nil {
 		return uuid.UUID{}, err
 	}
