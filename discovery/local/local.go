@@ -17,7 +17,8 @@ import (
 	"github.com/vsekhar/peers/internal/atomic"
 )
 
-const maxAge = 30 * time.Second
+const maxEntryAge = 30 * time.Second
+const maxFileAge = 60 * time.Second
 
 func GetBinarySpecificPath() string {
 	// For testing
@@ -26,7 +27,15 @@ func GetBinarySpecificPath() string {
 		panic(err)
 	}
 	execPath = filepath.Base(execPath)
-	return filepath.Join(os.TempDir(), execPath)
+	path := filepath.Join(os.TempDir(), execPath)
+	s, err := os.Stat(path)
+	if err != nil {
+		return path
+	}
+	if time.Since(s.ModTime()) > maxFileAge {
+		os.RemoveAll(path)
+	}
+	return path
 }
 
 type localUnixDomainSocketDiscoverer struct {
@@ -84,7 +93,7 @@ func (l *localUnixDomainSocketDiscoverer) Discover(ctx context.Context) string {
 			l.logger.Printf("peers-discover-local bad entry '%s' in %s: %v", t, l.path, err)
 			continue
 		}
-		if time.Since(time.Unix(seconds, 0)) > maxAge {
+		if time.Since(time.Unix(seconds, 0)) > maxEntryAge {
 			continue
 		}
 		entries = append(entries, entry{addrPort, seconds})
