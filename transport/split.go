@@ -43,7 +43,7 @@ type splitTransport struct {
 	muxListener net.Listener
 	tag         string
 	matcher     func(r io.Reader) bool
-	packets     *circular.Buffer //  *packet
+	packets     *circular.Buffer[*packet]
 }
 
 var _ Interface = (*splitTransport)(nil)
@@ -106,7 +106,7 @@ func (t *splitTransport) Accept() (net.Conn, error) {
 }
 
 func (t *splitTransport) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
-	packet := t.packets.LoadOrWait().(*packet)
+	packet := t.packets.LoadOrWait()
 	n = copy(p, packet.payload)
 	return n, packet.addr, nil
 }
@@ -140,7 +140,7 @@ func Split(transport Interface, logger *log.Logger, tags ...string) map[string]I
 			muxListener: mux.Match(matcher),
 			tag:         t,
 			matcher:     matcher,
-			packets:     circular.NewBuffer(packetBufferLength),
+			packets:     circular.NewBuffer[*packet](packetBufferLength),
 		}
 	}
 	mux.HandleError(func(err error) bool {

@@ -7,14 +7,14 @@ import (
 )
 
 func TestCircular(t *testing.T) {
-	c := NewBuffer(3)
+	c := NewBuffer[int](3)
 	c.Store(1)
 	c.Store(2)
 	c.LoadOrWait() // --> 1
 	c.Store(3)
 	c.Store(4)
 	c.Store(5) // clobbers 2
-	v := c.LoadOrWait().(int)
+	v := c.LoadOrWait()
 	if v != 3 {
 		t.Fatalf("expected 3, got %d", v)
 	}
@@ -29,12 +29,12 @@ func TestCircular(t *testing.T) {
 }
 
 func TestWait(t *testing.T) {
-	c := NewBuffer(3)
+	c := NewBuffer[int](3)
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		v := c.LoadOrWait().(int)
+		v := c.LoadOrWait()
 		if v != 1 {
 			t.Errorf("expected 1 got %d", v)
 		}

@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-type Buffer struct {
+type Buffer[T any] struct {
 	mu       *sync.Mutex
 	cond     *sync.Cond
 	in       *ring.Ring
@@ -13,10 +13,10 @@ type Buffer struct {
 	nonEmpty bool
 }
 
-func NewBuffer(n int) *Buffer {
+func NewBuffer[T any](n int) *Buffer[T] {
 	mu := &sync.Mutex{}
 	r := ring.New(n)
-	return &Buffer{
+	return &Buffer[T]{
 		mu:   mu,
 		cond: sync.NewCond(mu),
 		in:   r,
@@ -24,7 +24,7 @@ func NewBuffer(n int) *Buffer {
 	}
 }
 
-func (b *Buffer) Store(v interface{}) {
+func (b *Buffer[T]) Store(v T) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.in.Value = v
@@ -36,7 +36,7 @@ func (b *Buffer) Store(v interface{}) {
 	b.cond.Signal()
 }
 
-func (b *Buffer) LoadOrWait() interface{} {
+func (b *Buffer[T]) LoadOrWait() T {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for b.in == b.out && !b.nonEmpty {
@@ -47,5 +47,5 @@ func (b *Buffer) LoadOrWait() interface{} {
 	if b.in == b.out {
 		b.nonEmpty = false
 	}
-	return r
+	return r.(T)
 }
