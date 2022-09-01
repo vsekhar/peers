@@ -24,13 +24,8 @@ func New(ctx context.Context, f func()) *Trigger {
 	go func() {
 		for {
 			select {
-			case _, ok := <-r.ch:
-				if !ok {
-					return
-				}
-				if f != nil {
-					f()
-				}
+			case <-r.ch:
+				f()
 			case <-waitCtx.Done():
 				return
 			}

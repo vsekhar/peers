@@ -80,13 +80,16 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 	}
 
 	p := &Peers{
-		ctx:          ctx,
-		cancel:       cancel,
-		config:       cfg,
-		transport:    scfg.MemberlistConfig.Transport,
-		serf:         srf,
-		memberNotify: singlego.New(ctx, cfg.MemberNotify),
-		addr:         cfg.Transport.Addr(),
+		ctx:       ctx,
+		cancel:    cancel,
+		config:    cfg,
+		transport: scfg.MemberlistConfig.Transport,
+		serf:      srf,
+		addr:      cfg.Transport.Addr(),
+	}
+
+	if cfg.MemberNotify != nil {
+		p.memberNotify = singlego.New(ctx, cfg.MemberNotify)
 	}
 
 	// Discover members
@@ -118,7 +121,9 @@ func New(pctx context.Context, cfg Config) (*Peers, error) {
 			case e := <-ech:
 				switch e.(type) {
 				case serf.MemberEvent:
-					p.memberNotify.Notify()
+					if p.memberNotify != nil {
+						p.memberNotify.Notify()
+					}
 				case serf.UserEvent: // unused
 				default:
 					panic("unknown event type")
@@ -158,6 +163,8 @@ func (p *Peers) Shutdown() error {
 		return err
 	}
 	p.cancel()
-	p.memberNotify.Close()
+	if p.memberNotify != nil {
+		p.memberNotify.Close()
+	}
 	return nil
 }
